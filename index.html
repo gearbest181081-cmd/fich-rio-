@@ -424,8 +424,7 @@ async function setParent(d, p){
 }
 const ownCards = id => Object.values(S.cards).filter(c => c.deck === id);
 const deckCards = id => { if (!id) return Object.values(S.cards); const ids = descendants(id); return Object.values(S.cards).filter(c => ids.has(c.deck)); };
-let collapsed = {}; try { collapsed = JSON.parse(localStorage.getItem("fichario-fechados") || "{}"); } catch(e){}
-function toggleCollapsed(id){ collapsed[id] = !collapsed[id]; try { localStorage.setItem("fichario-fechados", JSON.stringify(collapsed)); } catch(e){} }
+
 function counts(id){ const cs = deckCards(id); return {total:cs.length, due:cs.filter(isDue).length, nw:cs.filter(isNew).length}; }
 function streak(){ const log = S.profile.log || {}; let n = 0, t = Date.now(); if (!log[today(t)]) t -= DAY; while (log[today(t)] && log[today(t)][0] > 0) { n++; t -= DAY; } return n; }
 function acc7(){ const log = S.profile.log || {}; let s = 0, r = 0; for (let i = 0; i < 7; i++) { const e = log[today(Date.now() - i*DAY)]; if (e) { s += e[0]; r += e[1]; } } return s ? Math.round(r/s*100) : null; }
@@ -469,10 +468,10 @@ function renderHome(){
       <div class="row small" style="gap:8px"><label for="newdeck-parent">Dentro de</label><select class="txt" id="newdeck-parent" style="flex:1;min-width:160px;width:auto"><option value="">Nenhum (baralho principal)</option>${deckOptions(view.parent)}</select></div>
       <label class="row small" style="gap:8px"><input type="checkbox" id="newdeck-shared"> Compartilhado: outras pessoas entram com um código e estudam as mesmas cartas</label></form></div>
     <div id="joindeck" hidden class="panel" style="padding:12px;margin-bottom:12px"><form class="row" id="fjoin"><input class="txt" id="join-code" placeholder="Cole o código do baralho" style="flex:1;min-width:180px" required autocomplete="off"><button class="btn primary">Entrar</button><button type="button" class="btn ghost" data-act="canceljoin">Cancelar</button></form></div>
-    <div class="panel decks">${decks.length ? deckTree().filter(({d}) => { let p = parentOf(d); while (p) { if (collapsed[p]) return false; p = parentOf(S.decks[p]); } return true; }).map(({d, depth}) => { const c = counts(d.id); const kids = childrenOf(d.id).length; return `
+    <div class="panel decks">${decks.length ? childrenOf(null).map(d => { const c = counts(d.id); const kids = childrenOf(d.id).length; return `
       <div class="deck"><span class="sw" style="background:${esc(d.color)}"></span>
-        <div class="tw" style="padding-left:${depth * 18}px"><button class="fold ${kids ? "" : "none"}" data-act="fold" data-id="${d.id}" aria-label="${collapsed[d.id] ? "Abrir" : "Fechar"} ${esc(d.name)}" aria-expanded="${!collapsed[d.id]}">${collapsed[d.id] ? "▸" : "▾"}</button><div style="min-width:0"><button class="name" data-act="open" data-id="${d.id}">${esc(d.name)}</button>
-          <div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}${c.due ? `<span class="chip due">${c.due} revisar</span>` : ""}${c.nw ? `<span class="chip new">${c.nw} novas</span>` : ""}<span class="chip">${c.total} cartas</span>${kids ? `<span class="chip">${kids} ${kids === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div></div>
+        <div style="min-width:0"><button class="name" data-act="open" data-id="${d.id}">${esc(d.name)}</button>
+          <div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}${c.due ? `<span class="chip due">${c.due} revisar</span>` : ""}${c.nw ? `<span class="chip new">${c.nw} novas</span>` : ""}<span class="chip">${c.total} cartas</span>${kids ? `<span class="chip">${kids} ${kids === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div>
         <button class="btn ${c.due || c.nw ? "primary" : ""}" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button>
       </div>`; }).join("") : `<div class="empty"><h3>Nenhum baralho ainda</h3><p class="muted">Crie um baralho por matéria, como Constitucional ou Português, e adicione suas cartas.</p></div>`}</div>
     <p class="small muted" style="margin-top:14px">Dica: no celular, use "Adicionar à tela inicial" no menu do navegador para abrir o fichário como um app.</p>`;
@@ -972,7 +971,6 @@ $app.addEventListener("click", e => {
     case "studyall": startStudy(null); break;
     case "newdeck": { const p = document.getElementById("newdeck"); p.hidden = false; document.getElementById("newdeck-name").focus(); break; }
     case "newsub": go("home", {parent:view.id}); setTimeout(() => { const p = document.getElementById("newdeck"); if (p) { p.hidden = false; document.getElementById("newdeck-name").focus(); } }, 0); break;
-    case "fold": toggleCollapsed(id); renderHome(); break;
     case "cancelnew": document.getElementById("newdeck").hidden = true; break;
     case "joindeck": { const p = document.getElementById("joindeck"); p.hidden = false; document.getElementById("join-code").focus(); break; }
     case "canceljoin": document.getElementById("joindeck").hidden = true; break;
