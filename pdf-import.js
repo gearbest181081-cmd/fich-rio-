@@ -99,6 +99,21 @@ export function parseQuestions(text){
   // cabeçalhos e rodapés que se repetem em várias páginas
   const freq = {}; lines.forEach(l => freq[l] = (freq[l] || 0) + 1);
   lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l)));
+  // sumário/índice: linhas com pontilhado até o número da página e o bloco logo abaixo do título "Sumário"
+  const TOC_LINE = /(?:\.\s?){4,}\s*\d{1,4}$|…+\s*\d{1,4}$|_{4,}\s*\d{1,4}$/;
+  const tocKept = []; let inToc = false;
+  for (const l of lines) {
+    if (/^(?:sum[áa]rio|[íi]ndice|conte[úu]do program[áa]tico)\b/i.test(l) && l.length < 40) { inToc = true; continue; }
+    if (TOC_LINE.test(l)) continue;
+    if (inToc) {
+      // entradas de sumário: curtas e terminando no número da página
+      if (l.length < 110 && /\s\d{1,4}$/.test(l) && !ALT.test(l)) continue;
+      inToc = false;
+    }
+    tocKept.push(l);
+  }
+  lines = tocKept;
+
   // gabarito em qualquer parte do arquivo (primeiras páginas, fim ou meio):
   // linhas só com pares "1-C 2-A", tabela de números com letras embaixo, ou pares logo após um título "Gabarito"
   const key = {};
@@ -128,31 +143,45 @@ export function parseQuestions(text){
   // "(A)" no meio da linha (comum no OCR): quebra antes de cada alternativa entre parênteses
   lines = lines.flatMap(l => /\S\s+\([A-E]\)\s/.test(l) ? l.split(/\s+(?=\([A-E]\)\s)/) : [l]);
 
-  const qs = []; let q = null, mode = "front", prevNum = null;
-  const close = () => { if (q) qs.push(q); };
-  for (const l of lines) {
-    const m = l.match(QSTART);
-    const num = m ? +(m[1] || m[3]) : null;
-    const isStart = m && (prevNum === null ? num < 1000 && (m[1] || (m[4] || "").length > 15) : num === prevNum + 1);
-    if (isStart) {
-      close(); prevNum = num; mode = "front";
-      q = {num, front:(m[2] ?? m[4] ?? "").trim(), options:[], answer:null, comment:""};
-      continue;
+  // lê as questões a partir de uma linha, exigindo numeração em sequência (1, 2, 3...)
+  const runFrom = (start, forced = true) => {
+    const qs = []; let q = null, mode = "front", prevNum = null;
+    const close = () => { if (q) qs.push(q); };
+    for (let i = start; i < lines.length; i++) {
+      const l = lines[i];
+      const m = l.match(QSTART);
+      const num = m ? +(m[1] || m[3]) : null;
+      const isStart = m && (prevNum === null ? ((forced && i === start) || (num < 1000 && (m[1] || (m[4] || "").length > 15))) : num === prevNum + 1);
+      if (isStart) {
+        close(); prevNum = num; mode = "front";
+        q = {num, front:(m[2] ?? m[4] ?? "").trim(), options:[], answer:null, comment:""};
+        continue;
+      }
+      if (!q) continue;
+      // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
+      if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { mode = "skip"; continue; }
+      const g = l.match(GAB_LINE);
+      if (g && g[1] !== undefined) { const a = normAnswer(g[1].split(/\s/)[0]); if (a) { q.answer = a; mode = "after"; continue; } }
+      const c = l.match(COMMENT);
+      if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
+      const a = l.match(ALT);
+      if (a && mode !== "comment" && a[1].toUpperCase() === "ABCDE"[q.options.length]) { q.options.push(a[2].trim()); mode = "opt"; continue; }
+      if (mode === "front") q.front += (q.front ? " " : "") + l;
+      else if (mode === "opt") q.options[q.options.length - 1] += " " + l;
+      else if (mode === "comment") q.comment += (q.comment ? " " : "") + l;
     }
-    if (!q) continue;
-    // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
-    if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { mode = "skip"; continue; }
-    const g = l.match(GAB_LINE);
-    if (g && g[1] !== undefined) { const a = normAnswer(g[1].split(/\s/)[0]); if (a) { q.answer = a; mode = "after"; continue; } }
-    const c = l.match(COMMENT);
-    if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
-    const a = l.match(ALT);
-    if (a && mode !== "comment" && a[1].toUpperCase() === "ABCDE"[q.options.length]) { q.options.push(a[2].trim()); mode = "opt"; continue; }
-    if (mode === "front") q.front += (q.front ? " " : "") + l;
-    else if (mode === "opt") q.options[q.options.length - 1] += " " + l;
-    else if (mode === "comment") q.comment += (q.comment ? " " : "") + l;
-  }
-  close();
+    close();
+    return qs;
+  };
+  // pontuação de uma sequência: questão com alternativas vale mais; título solto (sumário, capítulo) não vale nada
+  const score = qs => qs.reduce((s, q) => s + (q.options.length >= 2 ? 3 : q.answer ? 2 : q.front.length >= 60 ? 1 : 0), 0);
+  // tenta começar em cada "1" do arquivo e fica com a sequência mais parecida com uma prova
+  const starts = [];
+  // (títulos de capítulo em maiúsculas, como "1 DIREITO PENAL", não contam como questão 1)
+  lines.forEach((l, i) => { const m = l.match(QSTART); if (m && +(m[1] || m[3]) === 1 && /[a-zà-ú]/.test(m[2] ?? m[4] ?? "")) starts.push(i); });
+  let qs = [], best = -1;
+  for (const st of starts) { const r = runFrom(st); const sc = score(r); if (sc > 0 && sc >= best) { best = sc; qs = r; } }
+  if (best <= 0) qs = runFrom(0, false);
 
   return qs.filter(q => q.front.length > 3).map(q => {
     const ans = q.answer || key[q.num] || null;
