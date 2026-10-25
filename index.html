@@ -578,7 +578,8 @@ function renderHome(){
   const all = counts(); const st = streak(); const ac = acc7();
   const toStudy = studyable(all);
   const tops = childrenOf(null), dsel = view.dsel || null;
-  $app.innerHTML = header() + welcomePanel() + `
+  const saved = simSaved();
+  $app.innerHTML = header() + welcomePanel() + (saved ? `<div class="panel row spread" style="padding:12px 14px;margin-bottom:14px"><span><b>Simulado em andamento</b><br><span class="small muted">${esc(S.decks[saved.deck]?.name || "")} · ${saved.qs.filter(x => saved.ans[x] !== undefined).length} de ${saved.qs.length} respondidas</span></span><span class="row" style="gap:6px"><button class="btn ghost small" data-act="simdrop">Descartar</button><button class="btn primary" data-act="simresume">Continuar</button></span></div>` : "") + `
     <section class="today" aria-label="Resumo do dia">
       <div class="first"><span class="label">Para hoje</span>
         <div class="row spread"><span class="big num">${toStudy}</span><button class="btn primary" data-act="studyall" ${toStudy ? "" : "disabled"}>Estudar tudo</button></div>
@@ -991,6 +992,11 @@ function renderSimSetup(){
     go("sim", {deck:view.deck, qs:ids.slice(0, n), i:0, ans:{}, spent:{}, t0:Date.now(), enter:Date.now(), limit:free ? 0 : Math.max(1, +mIn.value || 1) * MIN, cebr:!!(cb && cb.checked)});
   };
 }
+// simulado em andamento fica guardado no aparelho: se o celular fechar a aba, dá para continuar
+const simKey = () => "fich-sim-" + (me ? me.uid : "");
+function simSave(){ try { localStorage.setItem(simKey(), JSON.stringify(view)); } catch(e){} }
+function simSaved(){ try { const v = JSON.parse(localStorage.getItem(simKey()) || "null"); return v && v.name === "sim" && Date.now() - v.t0 < DAY ? v : null; } catch(e){ return null; } }
+function simClear(){ try { localStorage.removeItem(simKey()); } catch(e){} }
 function simMove(to){
   const st = view; const id = st.qs[st.i]; const now = Date.now();
   st.spent[id] = (st.spent[id] || 0) + (now - st.enter); st.enter = now;
@@ -1012,6 +1018,7 @@ function renderSim(){
     <details class="simmap"><summary class="small">Ver todas as questões (${nAns} de ${st.qs.length} respondidas)</summary><div class="grid">${st.qs.map((x, k) => `<button class="${st.ans[x] !== undefined ? "done" : ""} ${k === st.i ? "cur" : ""}" data-act="simgo" data-v="${k}">${k + 1}</button>`).join("")}</div></details>
     <p class="keys">${c.type === "mc" ? "<kbd>A</kbd>–<kbd>E</kbd> marcar" : "<kbd>C</kbd> certo · <kbd>E</kbd> errado"} · <kbd>←</kbd> <kbd>→</kbd> navegar</p>`;
   if (st.confirm) simAskEnd();
+  simSave();
 }
 function simAskEnd(){
   const st = view; const blank = st.qs.filter(x => st.ans[x] === undefined).length; st.confirm = true;
@@ -1027,7 +1034,7 @@ function simFinish(timeout){
   const score = items.length ? Math.max(0, Math.round(net / items.length * 100)) : 0;
   const ds = {...(S.profile.dstats || {})}; items.forEach(x => { if (x.right !== null) addDeckStat(ds, x.deck, x.right, x.ms); }); S.profile.dstats = ds;
   const sims = [...(S.profile.sims || []), {t:now, deck:st.deck, name:S.decks[st.deck]?.name || "", n:items.length, right, wrong, blank, ms, score, cebr:st.cebr}].slice(-30);
-  S.profile.sims = sims; store.putProfile();
+  S.profile.sims = sims; store.putProfile(); simClear();
   go("simres", {deck:st.deck, items, right, wrong, blank, net, score, ms, cebr:st.cebr, timeout, only:"wrong"});
 }
 function renderSimRes(){
@@ -1052,7 +1059,7 @@ function renderSimRes(){
         <p class="small" style="margin:6px 0 0">Sua resposta: <b>${ansTxt(c, x.a)}</b> · Gabarito: <b>${gab}</b> · <span class="muted num">${clock(x.ms)}</span></p>
         ${!isBlank(c.comment) ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;font-weight:700">Comentário</summary><div class="comment content" style="margin-top:6px">${c.comment}</div></details>` : ""}</article>`; }).join("")
       : `<div class="panel empty"><p class="muted">Nenhum erro. Mandou bem!</p></div>`}</div>
-    <div class="row sticky-bar"><button class="btn" data-act="open" data-id="${r.deck}">Voltar ao baralho</button><button class="btn primary" data-act="simsetup" data-id="${r.deck}" style="flex:1">Novo simulado</button></div>`;
+    <div class="row sticky-bar"><button class="btn" data-act="open" data-id="${r.deck}">Voltar</button>${r.wrong + r.blank ? `<button class="btn primary" data-act="simreview" style="flex:1">${r.wrong + r.blank === 1 ? "Estudar o erro" : `Estudar os ${r.wrong + r.blank} erros`}</button>` : ""}<button class="btn ${r.wrong + r.blank ? "" : "primary"}" data-act="simsetup" data-id="${r.deck}" ${r.wrong + r.blank ? "" : 'style="flex:1"'}>${r.wrong + r.blank ? "Novo" : "Novo simulado"}</button></div>`;
 }
 setInterval(() => {
   if (view.name !== "sim") return;
@@ -1416,6 +1423,9 @@ $app.addEventListener("click", e => {
     case "simend": simAskEnd(); break;
     case "simcontinue": view.confirm = false; document.getElementById("simconfirm").innerHTML = ""; break;
     case "simfinish": simFinish(false); break;
+    case "simresume": { const v = simSaved(); if (v) { v.enter = Date.now(); go("sim", v); } break; }
+    case "simdrop": simClear(); renderHome(); break;
+    case "simreview": { const ids = view.items.filter(x => x.right !== true).map(x => x.id).filter(x => S.cards[x]); if (ids.length) go("study", {deck:view.deck, queue:ids, i:0, seen:0, right:0, firstSeen:{}, total:ids.length, t0:Date.now(), times:[]}); break; }
     case "simonly": view.only = b.dataset.v; renderSimRes(); break;
     case "pdf": go("pdf", {deck:id || ""}); break;
     case "pdfagain": go("pdf", {deck:view.deck}); break;
