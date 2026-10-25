@@ -863,7 +863,7 @@ async function showOcr(f){
       view.busy = false; try { lock && lock.release(); } catch(e){}
       const items = parseQuestions(text);
       if (!items.length) { om.innerHTML = `<span class="err">Li as páginas, mas não reconheci questões numeradas nelas.</span> Tente outras páginas ou confira abaixo o que foi lido.`; box.insertAdjacentHTML("beforeend", `<details><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido</summary><textarea class="txt" readonly style="margin-top:8px">${esc(text)}</textarea></details>`); go.disabled = false; stop.hidden = true; return; }
-      view.items = items; view.file = f.name + ` (páginas ${from}–${to})`; renderPdf();
+      await finishPdf(items, f.name + ` (páginas ${from}–${to})`, om);
     } catch(err){ console.error(err); try { lock && lock.release(); } catch(e){} view.busy = false; go.disabled = false; stop.hidden = true; om.innerHTML = `<span class="err">Não consegui ler as páginas. Confira a internet e tente de novo com menos páginas.</span>`; }
   };
 }
@@ -894,40 +894,71 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
+// lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
+async function applyKeyFile(f, items, msg){
+  msg.textContent = "Lendo o gabarito…";
+  let text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo o gabarito: página ${p} de ${n}…`; });
+  if (text.replace(/\s/g, "").length < 20) {
+    const n = Math.min(await pdfPageCount(f), 8);
+    text = await ocrPdf(f, 1, n, (cur, tot, fr) => { msg.textContent = `Gabarito escaneado: lendo página ${cur} de ${tot}… ${Math.round(((cur - 1) + fr) / tot * 100)}%`; });
+  }
+  const key = parseAnswerKey(text); let n = 0;
+  items.forEach(q => {
+    const a = key[q.num]; if (!a) return;
+    if (q.type === "mc") { const k = "ABCDE".indexOf(a); if (k >= 0 && k < q.options.length) { q.correct = k; n++; } }
+    else if (a === "C" || a === "E") { q.answer = a; n++; }
+  });
+  return n;
+}
+async function finishPdf(items, name, msg){
+  view.keyNote = null;
+  if (view.keyFile) {
+    try { const n = await applyKeyFile(view.keyFile, items, msg); view.keyNote = n ? {ok:true, text:`Gabarito de ${view.keyFile.name} aplicado em ${n} de ${items.length} questões.`} : {ok:false, text:`Não encontrei no arquivo ${view.keyFile.name} respostas com os números dessas questões.`}; }
+    catch(err){ console.error(err); view.keyNote = {ok:false, text:`Não consegui ler o gabarito ${view.keyFile.name}.`}; }
+  }
+  view.items = items; view.file = name; renderPdf();
+}
 function renderPdf(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
   const opts = deckOptions(view.deck);
   const top = header() + `<div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="${view.deck ? "open" : "home"}" data-id="${view.deck || ""}">← Voltar</button></div><h2 style="margin-bottom:14px">Importar questões de PDF</h2>`;
   if (!view.items) {
     $app.innerHTML = top + `<section class="panel stack" style="padding:16px">
-      <p class="small muted">Escolha a prova ou a lista de questões em PDF. O Fichário separa enunciado, alternativas e gabarito e mostra tudo para você conferir antes de salvar.</p>
+      <p class="small muted">Escolha a prova em PDF e, se o gabarito vier em outro arquivo, escolha ele também. O Fichário separa enunciado e alternativas, liga cada resposta à sua questão pelo número e mostra tudo para você conferir antes de salvar.</p>
       <div class="field"><label class="label" for="pdf-deck">Salvar no baralho</label><select class="txt" id="pdf-deck"><option value="">Escolha…</option>${opts}<option value="${NEWDECK}" ${decks.length ? "" : "selected"}>+ Criar novo baralho</option></select>${newDeckFields("pdf")}</div>
-      <div class="row"><label class="btn primary" for="pdf-file" style="min-height:46px">Escolher PDF</label><input type="file" id="pdf-file" accept="application/pdf,.pdf" hidden></div>
+      <div class="field"><span class="label">1. Prova (questões)</span><div class="row" style="gap:8px"><label class="btn" for="pdf-file" style="min-height:46px">Escolher prova</label><input type="file" id="pdf-file" accept="application/pdf,.pdf" hidden><span class="small muted" id="pdf-fname">Nenhum arquivo</span></div></div>
+      <div class="field"><span class="label">2. Gabarito em outro PDF (opcional)</span><div class="row" style="gap:8px"><label class="btn" for="pdf-gab" style="min-height:46px">Escolher gabarito</label><input type="file" id="pdf-gab" accept="application/pdf,.pdf" hidden><span class="small muted" id="pdf-gname">Se o gabarito estiver dentro da prova, pode pular</span><button class="btn ghost small" id="pdf-gclear" type="button" hidden>Tirar</button></div></div>
+      <div class="row"><button class="btn primary" id="pdf-read" type="button" style="min-height:46px" disabled>Ler e relacionar</button></div>
       <p id="pdf-msg" class="small muted" aria-live="polite"></p>
       <details><summary class="small" style="cursor:pointer;font-weight:700">Que tipo de PDF funciona?</summary><div class="stack small muted" style="gap:6px;margin-top:8px">
         <p>Questões numeradas (1., 1), Questão 1 ou 51 no estilo Cebraspe), com alternativas (A) a (E) ou itens de certo/errado.</p>
-        <p>O gabarito pode estar em qualquer parte do arquivo, nas primeiras páginas ou no fim (1-C 2-A ou em tabela), ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Ele é ligado sozinho a cada questão pelo número. Comentários depois de "Comentário:" também entram.</p>
+        <p>O gabarito pode vir num PDF separado (escolha no passo 2) ou estar em qualquer parte da própria prova, nas primeiras páginas ou no fim (1-C 2-A ou em tabela), ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Ele é ligado sozinho a cada questão pelo número. Comentários depois de "Comentário:" também entram.</p>
         <p>PDF escaneado (foto da página) também funciona: o Fichário lê as páginas como imagem. É mais lento, então você escolhe quais páginas ler. Questões sem gabarito aparecem para você marcar a resposta.</p></div></details>
       <div id="ocr-box" hidden></div>
     </section>`;
     wireNewDeck("pdf");
-    document.getElementById("pdf-file").onchange = async e => {
-      const f = e.target.files[0]; if (!f) return;
+    const pick = view.pick = {prova:null, gab:null};
+    const readBtn = document.getElementById("pdf-read"), gclear = document.getElementById("pdf-gclear");
+    document.getElementById("pdf-file").onchange = e => { pick.prova = e.target.files[0] || null; document.getElementById("pdf-fname").textContent = pick.prova ? pick.prova.name : "Nenhum arquivo"; readBtn.disabled = !pick.prova; const nn = document.getElementById("pdf-newname"); if (pick.prova && nn && !nn.value.trim()) nn.value = pick.prova.name.replace(/\.pdf$/i, ""); };
+    document.getElementById("pdf-gab").onchange = e => { pick.gab = e.target.files[0] || null; document.getElementById("pdf-gname").textContent = pick.gab ? pick.gab.name : "Se o gabarito estiver dentro da prova, pode pular"; gclear.hidden = !pick.gab; };
+    gclear.onclick = () => { pick.gab = null; document.getElementById("pdf-gab").value = ""; document.getElementById("pdf-gname").textContent = "Se o gabarito estiver dentro da prova, pode pular"; gclear.hidden = true; };
+    readBtn.onclick = async () => {
+      const f = pick.prova; if (!f) return;
       const msg = document.getElementById("pdf-msg");
       const isNew = document.getElementById("pdf-deck").value === NEWDECK;
       let deck = null;
       try { deck = await resolveDeck("pdf", f.name.replace(/\.pdf$/i, "")); } catch(err){ console.error(err); }
-      if (!deck) { msg.innerHTML = `<span class="err">${isNew ? "Não consegui criar o baralho. Confira o nome." : "Escolha o baralho primeiro."}</span>`; e.target.value = ""; return; }
-      if (isNew) toast("Baralho criado");
-      view.deck = deck; view.busy = true; msg.textContent = "Lendo o PDF…";
+      if (!deck) { msg.innerHTML = `<span class="err">${isNew ? "Não consegui criar o baralho. Confira o nome." : "Escolha o baralho primeiro."}</span>`; return; }
+      if (isNew) { toast("Baralho criado"); document.getElementById("pdf-deck").innerHTML = `<option value="${deck}">${esc(S.decks[deck]?.name || "Novo baralho")}</option>`; document.getElementById("pdf-new").hidden = true; }
+      view.deck = deck; view.keyFile = pick.gab; view.busy = true; readBtn.disabled = true; msg.textContent = "Lendo a prova…";
       try {
-        const text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo página ${p} de ${n}…`; });
+        const text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo a prova: página ${p} de ${n}…`; });
         view.busy = false;
         if (text.replace(/\s/g, "").length < 40) { view.scanFile = f; showOcr(f); return; }
         const items = parseQuestions(text);
-        if (!items.length) { msg.innerHTML = `<span class="err">Li o PDF, mas não reconheci questões numeradas nele.</span> Se quiser, mande o arquivo para o Claude converter em planilha e importe pela tela Importar / exportar.`; return; }
-        view.items = items; view.file = f.name; renderPdf();
-      } catch(err){ console.error(err); view.busy = false; msg.innerHTML = `<span class="err">Não consegui abrir esse PDF. Ele pode estar protegido por senha ou corrompido.</span>`; }
+        if (!items.length) { readBtn.disabled = false; msg.innerHTML = `<span class="err">Li o PDF, mas não reconheci questões numeradas nele.</span> Confira se escolheu a prova (e não o gabarito) no passo 1.`; return; }
+        await finishPdf(items, f.name, msg);
+      } catch(err){ console.error(err); view.busy = false; readBtn.disabled = false; msg.innerHTML = `<span class="err">Não consegui abrir esse PDF. Ele pode estar protegido por senha ou corrompido.</span>`; }
     };
     return;
   }
@@ -937,6 +968,7 @@ function renderPdf(){
   const deckName = S.decks[view.deck]?.name || "";
   $app.innerHTML = top + `<section class="panel stack" style="padding:16px;margin-bottom:14px;gap:8px">
       <p><b>${it.length} questões encontradas</b> em ${esc(view.file)}: ${nMc} de múltipla escolha e ${nCe} de certo ou errado.</p>
+      ${view.keyNote ? `<p class="small" style="color:${view.keyNote.ok ? "var(--good)" : "var(--warn)"}"><b>${view.keyNote.ok ? "✓ " : ""}${esc(view.keyNote.text)}</b></p>` : ""}
       ${noKey ? `<p class="small" style="color:var(--warn)">${noKey} ${noKey === 1 ? "está" : "estão"} sem gabarito e ficaram desmarcadas. Escolha a resposta para incluir.</p>` : ""}
       <p class="small muted">Confira o texto, corrija o que precisar e toque em Importar. Elas vão para o baralho <b>${esc(deckName)}</b>.</p>
       <div class="row"><button class="btn ghost small" data-act="pdfall" data-v="1">Marcar todas</button><button class="btn ghost small" data-act="pdfall" data-v="0">Desmarcar todas</button>${noKey ? `<label class="btn small" for="pdf-keyfile">Carregar gabarito de outro PDF</label><input type="file" id="pdf-keyfile" accept="application/pdf,.pdf" hidden>` : ""}</div>
@@ -962,15 +994,11 @@ function renderPdf(){
   $app.querySelectorAll(".pdf-inc").forEach(c => c.onchange = pdfCount);
   const kf = document.getElementById("pdf-keyfile");
   if (kf) kf.onchange = async e => {
-    const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg"); msg.textContent = "Lendo o gabarito…";
-    try {
-      const key = parseAnswerKey(await extractPdfText(f)); let n = 0;
-      view.items.forEach((q, i) => { const a = key[q.num]; if (!a) return; if (q.type === "mc") { const k = "ABCDE".indexOf(a); if (k >= 0 && k < q.options.length && q.correct == null) { q.correct = k; n++; } } else if ((a === "C" || a === "E") && !q.answer) { q.answer = a; n++; } });
-      if (!n) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; return; }
-      // guarda o que já foi editado antes de redesenhar
-      view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
-      renderPdf(); toast(`Gabarito aplicado em ${n} questões`);
-    } catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler esse PDF.</span>`; }
+    const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg");
+    // guarda o que já foi editado antes de redesenhar
+    view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
+    try { const n = await applyKeyFile(f, view.items, msg); if (!n) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; return; } view.keyNote = {ok:true, text:`Gabarito de ${f.name} aplicado em ${n} de ${view.items.length} questões.`}; renderPdf(); }
+    catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler esse PDF.</span>`; }
   };
   pdfCount();
 }
