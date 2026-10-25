@@ -195,6 +195,21 @@ export function parseQuestions(text){
     kept.push(l);
   }
   lines = kept;
+  // tabela de gabarito em que a leitura por imagem perdeu os números (texto branco no fundo azul):
+  // sobram linhas só de letras, "B D B D C ...". Guardadas na ordem, para completar as respostas que faltarem.
+  const gridRows = [];
+  const letterRow = l => {
+    const toks = l.split(/\s+/).filter(Boolean); if (toks.length < 5) return null;
+    const out = []; let bad = 0;
+    for (const t0 of toks) {
+      const t = t0.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z]/g, "");
+      if (/^([A-Ea-e])\1*$/i.test(t) && t.length <= 3) out.push(t[0].toUpperCase());       // "C", "CC", "Cc"
+      else if (/^[A-E]{2,3}$/.test(t)) out.push(...t);                                    // "BD" = duas células grudadas
+      else { out.push(null); bad++; }
+    }
+    return bad <= Math.max(1, out.length * 0.15) ? out : null;
+  };
+  lines = lines.filter(l => { const r = letterRow(l); if (r) { gridRows.push(r); return false; } return true; });
   // separa alternativas que vieram na mesma linha: "(A) x (B) y"
   lines = lines.flatMap(l => ALT.test(l) && /\s\(?[B-E]\s*[).]\s/.test(l) ? l.split(/\s(?=\(?[B-E]\s*[).]\s)/) : [l]);
   // "(A)" no meio da linha (comum no OCR): quebra antes de cada alternativa entre parênteses
@@ -287,6 +302,31 @@ export function parseQuestions(text){
     else { out.options = q.options.slice(0, 5); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
     return out;
   });
+  // completa pela tabela só de letras. A leitura pode grudar ou perder uma célula, então a tabela é alinhada
+  // às respostas já conhecidas (como um "diff") antes de preencher as que faltam
+  const grid = gridRows.flat();
+  const total = expected || Math.max(0, ...result.map(q => q.num));
+  if (grid.length >= total * 0.8 && total) {
+    const ansOf = q => q.type === "mc" ? (q.correct != null ? "ABCDE"[q.correct] : null) : q.answer;
+    const byNum = {}; result.forEach(q => byNum[q.num] = q);
+    const A = Array.from({length:total}, (_, k) => byNum[k + 1] ? ansOf(byNum[k + 1]) : null);
+    const n = A.length, m = grid.length, G = -2;
+    const sc = (x, y) => x == null || y == null ? 0 : x === y ? 2 : -1;
+    const D = Array.from({length:n + 1}, () => new Array(m + 1).fill(0));
+    for (let i = 1; i <= n; i++) D[i][0] = i * G;
+    for (let j = 1; j <= m; j++) D[0][j] = j * G;
+    for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) D[i][j] = Math.max(D[i-1][j-1] + sc(A[i-1], grid[j-1]), D[i-1][j] + G, D[i][j-1] + G);
+    const pair = new Array(n).fill(null); let i = n, j = m, hit = 0, cmp = 0;
+    while (i > 0 && j > 0) {
+      if (D[i][j] === D[i-1][j-1] + sc(A[i-1], grid[j-1])) { pair[i-1] = grid[j-1]; if (A[i-1] && grid[j-1]) { cmp++; if (A[i-1] === grid[j-1]) hit++; } i--; j--; }
+      else if (D[i][j] === D[i-1][j] + G) i--; else j--;
+    }
+    if (!cmp || hit / cmp >= 0.8) result.forEach(q => {
+      const g = pair[q.num - 1]; if (!g || ansOf(q)) return;
+      if (q.type === "mc") { const k = "ABCDE".indexOf(g); if (k < q.options.length) q.correct = k; }
+      else if (g === "C" || g === "E") q.answer = g;
+    });
+  }
   result.expected = expected;
   return result;
 }

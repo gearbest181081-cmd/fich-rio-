@@ -933,7 +933,7 @@ async function resolveDeck(prefix, fallbackName){
 /* importar PDF */
 // [1,2,3,7,9,10] → "1–3, 7, 9–10"
 function ranges(ns){ const a = [...ns].sort((x, y) => x - y), out = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return out.join(", "); }
-const APP_VERSION = "20"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "21"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
