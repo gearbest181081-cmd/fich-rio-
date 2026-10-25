@@ -59,7 +59,7 @@ export async function extractPdfText(file, onProgress){
 const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,3})\s*(?:[.)\-–—:]|\s)\s*(.*)$/i;
 const ALT = /^\(?([A-Ea-e])\s*[).\-–—]\s+(.*)$/;
 // gabarito logo depois da questão: "Gabarito: B", "GABARITO: LETRA C", "Gab. C", "Resposta correta: (B)", "Alternativa correta: letra B"
-const GAB_LINE = /^(?:gabarito|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:\-–]?\s*\(?(certo|errado|[a-e])\)?(?![a-zà-ú])/i;
+const GAB_LINE = /^(?:gabarito|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:\-–]?\s*\(?(certo|errado|[a-e8])\)?(?![a-zà-ú\d])/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
 // instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
 const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;
@@ -99,7 +99,7 @@ export function parseQuestions(text){
   let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => l && !NOISE.test(l));
   // cabeçalhos e rodapés que se repetem em várias páginas
   const freq = {}; lines.forEach(l => freq[l] = (freq[l] || 0) + 1);
-  lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l)));
+  lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !GAB_LINE.test(l) && !COMMENT.test(l)));
   // sumário/índice: linhas com pontilhado até o número da página e o bloco logo abaixo do título "Sumário"
   const TOC_LINE = /(?:\.\s?){4,}\s*\d{1,4}$|…+\s*\d{1,4}$|_{4,}\s*\d{1,4}$/;
   const tocKept = []; let inToc = false;
@@ -160,7 +160,8 @@ export function parseQuestions(text){
       }
       if (!q) continue;
       const g = l.match(GAB_LINE);
-      if (g) { const a = normAnswer(g[1]); if (a) { q.answer = a; mode = "after"; continue; } }
+      if (g) { const a = normAnswer(g[1] === "8" ? "B" : g[1]); // leitura por imagem às vezes troca o B por 8
+        if (a) { q.answer = a; mode = "after"; continue; } }
       // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
       if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { mode = "skip"; continue; }
       const c = l.match(COMMENT);
