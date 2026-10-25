@@ -204,7 +204,7 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
-import { extractPdfText, parseQuestions, parseAnswerKey, pdfPageCount, ocrPdf, cancelOcr } from "./pdf-import.js";
+import { extractPdfText, parseQuestions, parseAnswerKey, pdfPageCount, ocrPdf, cancelOcr, SUBJECT_NAMES } from "./pdf-import.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager, doc, collection, setDoc, deleteDoc, updateDoc, getDoc, onSnapshot, query, where, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -894,7 +894,7 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
-const APP_VERSION = "12"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "13"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -968,11 +968,15 @@ function renderPdf(){
   const nMc = it.filter(q => q.type === "mc").length, nCe = it.length - nMc;
   const noKey = it.filter(q => (q.type === "mc" ? q.correct == null : !q.answer)).length;
   const deckName = S.decks[view.deck]?.name || "";
-  $app.innerHTML = top + `<section class="panel stack" style="padding:16px;margin-bottom:14px;gap:8px">
+  const isSharedDeck = !!S.decks[view.deck]?.shared;
+  const subjCount = Object.entries(it.reduce((m, q) => { if (q.subject) m[q.subject] = (m[q.subject] || 0) + 1; return m; }, {}));
+  const subjList = [...new Set([...it.map(q => q.subject).filter(Boolean), ...childrenOf(view.deck).map(d => d.name), ...SUBJECT_NAMES])];
+  $app.innerHTML = top + `<datalist id="pdf-subjects">${subjList.map(n => `<option value="${esc(n)}">`).join("")}</datalist><section class="panel stack" style="padding:16px;margin-bottom:14px;gap:8px">
       <p><b>${it.length} questões encontradas</b> em ${esc(view.file)}: ${nMc} de múltipla escolha e ${nCe} de certo ou errado.</p>
       ${view.keyNote ? `<p class="small" style="color:${view.keyNote.ok ? "var(--good)" : "var(--warn)"}"><b>${view.keyNote.ok ? "✓ " : ""}${esc(view.keyNote.text)}</b></p>` : ""}
       ${noKey ? `<p class="small" style="color:var(--warn)">${noKey} ${noKey === 1 ? "está" : "estão"} sem gabarito e ficaram desmarcadas. Escolha a resposta para incluir.</p>` : ""}
       <p class="small muted">Confira o texto, corrija o que precisar e toque em Importar. Elas vão para o baralho <b>${esc(deckName)}</b>.</p>
+      ${subjCount.length ? (isSharedDeck ? `<p class="small muted">Matérias encontradas: ${subjCount.map(([n, k]) => `${esc(n)} (${k})`).join(", ")}. A separação em sub-baralhos funciona em baralhos pessoais.</p>` : `<label class="row small" style="gap:8px;align-items:flex-start"><input type="checkbox" id="pdf-split" ${view.split === false ? "" : "checked"} style="margin-top:3px"><span><b>Separar em sub-baralhos por matéria</b> dentro de ${esc(deckName)}: ${subjCount.map(([n, k]) => `${esc(n)} (${k})`).join(", ")}. Dá para trocar a matéria de cada questão abaixo.</span></label>`) : ""}
       <div class="row"><button class="btn ghost small" data-act="pdfall" data-v="1">Marcar todas</button><button class="btn ghost small" data-act="pdfall" data-v="0">Desmarcar todas</button>${noKey ? `<label class="btn small" for="pdf-keyfile">Carregar gabarito de outro PDF</label><input type="file" id="pdf-keyfile" accept="application/pdf,.pdf" hidden>` : ""}</div>
       <p id="pdf-keymsg" class="small muted" aria-live="polite"></p>
     </section>
@@ -983,6 +987,7 @@ function renderPdf(){
         : `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option><option value="C" ${q.answer === "C" ? "selected" : ""}>Certo</option><option value="E" ${q.answer === "E" ? "selected" : ""}>Errado</option></select>`;
       return `<article class="panel stack" style="padding:12px 14px;gap:8px">
         <div class="row spread"><label class="row" style="gap:8px;font-weight:700"><input type="checkbox" class="pdf-inc" id="pdf-inc${i}" data-i="${i}" ${has ? "checked" : ""}> Questão ${q.num} <span class="tchip">${TSHORT[q.type]}</span></label>${gab}</div>
+        <div class="row small" style="gap:8px"><label for="pdf-s${i}" class="muted">Matéria</label><input class="txt pdf-s" id="pdf-s${i}" list="pdf-subjects" value="${esc(q.subject || "")}" placeholder="Sem matéria (fica no baralho principal)" style="flex:1;min-width:0;padding:6px 10px"></div>
         <textarea class="txt typed-in" id="pdf-f${i}" rows="3" style="margin:0">${esc(q.front)}</textarea>
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
         <details ${q.comment ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">${q.comment ? "Comentário" : "Adicionar comentário"}</summary><textarea class="txt" id="pdf-c${i}" rows="3" style="margin-top:6px" placeholder="Por que essa é a resposta">${esc(q.comment || "")}</textarea></details>
@@ -999,7 +1004,7 @@ function renderPdf(){
   if (kf) kf.onchange = async e => {
     const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg");
     // guarda o que já foi editado antes de redesenhar
-    view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; const c2 = document.getElementById("pdf-c" + i); if (c2) q.comment = c2.value; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
+    view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; const c2 = document.getElementById("pdf-c" + i); if (c2) q.comment = c2.value; const s2 = document.getElementById("pdf-s" + i); if (s2) q.subject = s2.value.trim(); const sp = document.getElementById("pdf-split"); if (sp) view.split = sp.checked; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
     try { const n = await applyKeyFile(f, view.items, msg); if (!n) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; return; } view.keyNote = {ok:true, text:`Gabarito de ${f.name} aplicado em ${n} de ${view.items.length} questões.`}; renderPdf(); }
     catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler esse PDF.</span>`; }
   };
@@ -1015,7 +1020,7 @@ async function pdfImport(){
     const front = esc(document.getElementById("pdf-f" + i).value.trim()).replace(/\n/g, "<br>");
     if (g === "") { missing.push(q.num); return; }
     const cm = (document.getElementById("pdf-c" + i)?.value ?? q.comment ?? "").trim();
-    const c = {deck, type:q.type, front, comment:cm ? esc(cm).replace(/\n/g, "<br>") : "", tags:[]};
+    const c = {deck, type:q.type, front, comment:cm ? esc(cm).replace(/\n/g, "<br>") : "", tags:[], subject:(document.getElementById("pdf-s" + i)?.value || "").trim()};
     if (q.type === "mc") { c.options = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim()).filter(Boolean); c.correct = Math.min(+g, c.options.length - 1); }
     else c.answer = g;
     cards.push(c);
@@ -1023,8 +1028,21 @@ async function pdfImport(){
   if (missing.length) { err.textContent = `Falta o gabarito da${missing.length > 1 ? "s questões" : " questão"} ${missing.join(", ")}. Escolha a resposta ou desmarque.`; err.hidden = false; return; }
   const btn = document.getElementById("pdf-go"); btn.disabled = true; btn.textContent = "Importando…";
   const t = Date.now();
-  for (let i = 0; i < cards.length; i++) await store.putCard({id:mkId(deck), created:t+i, reps:0, ivl:0, ease:2.5, due:0, ...cards[i]});
-  toast(`${cards.length} questões importadas`);
+  // sub-baralho por matéria: usa o que já existe com o mesmo nome dentro do baralho escolhido, senão cria
+  const split = document.getElementById("pdf-split")?.checked && !S.decks[deck]?.shared;
+  const subDecks = {}; let created = 0;
+  const norm = n => n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  if (split) {
+    childrenOf(deck).forEach(d => subDecks[norm(d.name)] = d.id);
+    for (const c of cards) {
+      if (!c.subject) continue;
+      const k = norm(c.subject);
+      if (!subDecks[k]) { const d = {id:uid(), name:c.subject, color:S.decks[deck]?.color || COLORS[0], created:t + created, parent:deck}; await store.putDeck(d); subDecks[k] = d.id; created++; }
+      c.deck = subDecks[k];
+    }
+  }
+  for (let i = 0; i < cards.length; i++) { const {subject, ...c} = cards[i]; await store.putCard({id:mkId(c.deck), created:t+i, reps:0, ivl:0, ease:2.5, due:0, ...c}); }
+  toast(`${cards.length} questões importadas` + (created ? `, ${created} sub-baralhos criados` : ""));
   go("deck", {id:deck});
 }
 async function doExport(){

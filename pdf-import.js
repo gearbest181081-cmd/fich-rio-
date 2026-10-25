@@ -101,10 +101,55 @@ export function parseAnswerKey(text){
   return parseKey(text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean));
 }
 
+const SMALL = new Set(["de","da","do","das","dos","e","a","o","em","na","no","para","com"]);
+function titleCase(t){ return t.toLowerCase().split(/\s+/).map((w, i) => i && SMALL.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(" "); }
+
+/* matéria pelo conteúdo da questão, quando o PDF não traz títulos: palavras típicas de cada disciplina */
+const SUBJECTS = [
+  ["Língua Portuguesa", "concordancia|regencia|crase|colocacao pronominal|oracao|oracoes|sujeito|predicado|substantivo|adjetivo|adverbio|pronome|conjuncao|preposicao|pontuacao|virgula|acentuacao|ortografia|sinonimo|antonimo|coesao|coerencia|sentido original|reescrita|vocabulo|figura de linguagem|interpretacao do texto|no texto|do texto|trecho|semantic|morfolog|sintatic|voz passiva|gramatical|norma culta|norma-padrao|tempo verbal|forma verbal|frase|frases|periodo composto"],
+  ["Matemática", "equacao|funcao (?:afim|quadratica|exponencial|logaritmica|do primeiro grau|do segundo grau)|porcentagem|razao|proporcao|regra de tres|fracao|perimetro|volume|triangulo|retangulo|circulo|mmc|mdc|potencia|raiz quadrada|progressao aritmetica|progressao geometrica|numeros inteiros|numero natural|geometri|algebr"],
+  ["Matemática Financeira", "juros|montante|capitalizacao|amortizacao|sistema de amortizacao|tabela price|desconto comercial|desconto racional|taxa nominal|taxa efetiva|valor presente|valor futuro|emprestimo|financiamento|prestacao|prestacoes|parcelas mensais"],
+  ["Raciocínio Lógico", "proposicao|proposicoes|logica|tabela-verdade|tabela verdade|negacao|silogismo|se e somente se|conectivo|argumento valido|premissa|tautologia|contradicao|equivalente logic|diagrama de venn|probabilidade|combinacao|arranjo|permutacao|sequencia logica|anagrama"],
+  ["Informática", "windows|linux|excel|word|planilha|navegador|internet|e-mail|correio eletronico|virus|malware|ransomware|backup|hardware|software|computador|teclas de atalho|atalho|nuvem|firewall|phishing|sistema operacional|libreoffice|writer|calc|outlook|chrome|firefox|url|intranet|protocolo http|pendrive|memoria ram"],
+  ["Direito Constitucional", "constituicao federal|constituicao|cf/88|cf/1988|constitucional|emenda constitucional|direitos fundamentais|direitos e garantias|habeas data|mandado de seguranca|mandado de injuncao|acao popular|stf|supremo tribunal|poder legislativo|congresso nacional|senado federal|camara dos deputados|presidente da republica|clausula petrea|nacionalidade|direitos politicos|direitos sociais"],
+  ["Direito Administrativo", "administracao publica|ato administrativo|atos administrativos|licitacao|contrato administrativo|servidor publico|servidores publicos|8\\.112|autarquia|fundacao publica|empresa publica|sociedade de economia mista|poder de policia|poder hierarquico|poder disciplinar|improbidade|agente publico|principio da eficiencia|impessoalidade|moralidade|14\\.133|concessao de servico|administracao direta|administracao indireta|processo administrativo|desvio de finalidade|anulacao|revogacao|motivacao do ato"],
+  ["Direito Penal", "crime|crimes|codigo penal|dolo|culposo|doloso|furto|roubo|homicidio|legitima defesa|imputabilidade|tentativa|consumacao|ilicitude|tipicidade|culpabilidade|reclusao|detencao|latrocinio|estelionato|peculato|concussao|corrupcao passiva|prevaricacao|pena privativa|insignificancia"],
+  ["Direito Processual Penal", "inquerito|processo penal|cpp|codigo de processo penal|denuncia|queixa-crime|acao penal|prisao em flagrante|prisao preventiva|prisao temporaria|autoridade policial|delegado de policia|interrogatorio|fianca|audiencia de custodia|indiciado|busca e apreensao"],
+  ["Direito Civil", "codigo civil|pessoa natural|pessoa juridica de direito privado|capacidade civil|negocio juridico|prescricao|decadencia|obrigacoes|posse|usucapiao|sucessao|heranca|casamento|uniao estavel|responsabilidade civil"],
+  ["Direito Tributário", "tributo|tributos|tributaria|tributario|imposto|icms|ipi|iss|iptu|ctn|fato gerador|obrigacao tributaria|credito tributario|lancamento tributario|isencao|imunidade tributaria|contribuicao de melhoria"],
+  ["Contabilidade", "ativo|passivo|patrimonio liquido|balanco patrimonial|dre|demonstracao do resultado|demonstracoes contabeis|lancamento|debito|credito|estoque|estoques|depreciacao|receita|despesa|custo|cpc|nbc tg|contabil|contabeis|fornecedores|lucro|razonete|provisao|escrituracao|exercicio social|caixa e equivalentes|ativo circulante|imobilizado|intangivel|amortizacao acumulada|mensuracao|valor justo"],
+  ["Ética e Legislação Profissional", "codigo de etica|etica profissional|profissional da contabilidade|crc|cfc|conselho federal de contabilidade|conselho regional|educacao profissional continuada|epc|nbc pg|perito contabil|cnpc|exercicio profissional|responsabilidade tecnica|sigilo profissional|profissao contabil|funcao social|interesse publico"],
+  ["Auditoria", "auditoria|auditor|auditores|parecer|opiniao do auditor|amostragem|nbc ta|distorcao relevante|ceticismo|procedimentos de auditoria|controle interno"],
+  ["Administração", "planejamento estrategico|organizacao|lideranca|motivacao|gestao de pessoas|swot|maslow|herzberg|cultura organizacional|clima organizacional|administracao geral|processo decisorio|estrutura organizacional"],
+  ["Economia", "oferta|demanda|pib|inflacao|elasticidade|monopolio|oligopolio|microeconomia|macroeconomia|politica monetaria|politica fiscal|taxa de cambio|curva de"],
+  ["Estatística", "media aritmetica|mediana|moda|desvio padrao|variancia|amostra|distribuicao normal|frequencia relativa|quartil|estatistic"],
+  ["Arquivologia", "arquivologia|arquivo corrente|arquivo intermediario|arquivo permanente|gestao documental|tabela de temporalidade|documento de arquivo|protocolo"],
+].map(([name, re]) => [name, new RegExp("(?:^|[^a-z])(?:" + re + ")(?![a-z])", "g")]);
+export const SUBJECT_NAMES = SUBJECTS.map(([n]) => n).concat("Inglês");
+export function guessSubject(text){
+  const t = " " + (text || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "") + " ";
+  // texto em inglês
+  const en = (t.match(/\b(?:the|and|of|is|which|that|according|following)\b/g) || []).length;
+  if (en >= 5) return "Inglês";
+  let best = "", bs = 0;
+  for (const [name, re] of SUBJECTS) {
+    let sc = 0; for (const m of t.matchAll(re)) sc += m[0].includes(" ") ? 2 : 1;
+    if (sc > bs) { bs = sc; best = name; }
+  }
+  return bs >= 2 ? best : "";
+}
+
 export function parseQuestions(text){
   let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => l && !NOISE.test(l));
   // cabeçalhos e rodapés que se repetem em várias páginas
   const freq = {}; lines.forEach(l => freq[l] = (freq[l] || 0) + 1);
+  // título de matéria: linha curta em maiúsculas que aparece uma vez só ("MATEMÁTICA FINANCEIRA")
+  const sectionTitle = l => {
+    if (!l || freq[l] > 1) return "";
+    const t = l.replace(/^[^A-Za-zÀ-ú]+|[^A-Za-zÀ-ú]+$/g, "");
+    if (t.length < 5 || t.length > 60 || /[a-zà-ú]/.test(t) || !/[A-ZÀ-Ú]{4}/.test(t) || /\d/.test(t) || GAB_LINE.test(t) || COMMENT.test(t) || INSTR.test(t) || /^(?:QUEST[ÕO]ES|GABARITO|COMENT[ÁA]RIOS?|ATEN[ÇC][ÃA]O|INSTRU[ÇC][ÕO]ES)\b/.test(t) || /(?:^|\s)(?:PROVA|SIMULADO|CADERNO|CONCURSO|CARGO|EDITAL|TRIBUNAL|BANCA|APOSTILA)(?:\s|$)|\s[-–—|]\s/.test(t)) return "";
+    return titleCase(t);
+  };
   lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !GAB_LINE.test(l) && !COMMENT.test(l)));
   // sumário/índice: linhas com pontilhado até o número da página e o bloco logo abaixo do título "Sumário"
   const TOC_LINE = /(?:\.\s?){4,}\s*\d{1,4}$|…+\s*\d{1,4}$|_{4,}\s*\d{1,4}$/;
@@ -152,8 +197,10 @@ export function parseQuestions(text){
 
   // lê as questões a partir de uma linha, exigindo numeração em sequência (1, 2, 3...)
   const runFrom = (start, forced = true) => {
-    const qs = []; let q = null, mode = "front", prevNum = null;
+    const qs = []; let q = null, mode = "front", prevNum = null, section = "", pend = null;
     const close = () => { if (q) qs.push(q); };
+    // título de matéria logo antes da primeira questão
+    for (let k = start - 1; k >= Math.max(0, start - 3); k--) { const t = sectionTitle(lines[k]); if (t) { section = t; break; } }
     for (let i = start; i < lines.length; i++) {
       const l = lines[i];
       const m = l.match(QSTART);
@@ -161,7 +208,9 @@ export function parseQuestions(text){
       const isStart = m && (prevNum === null ? ((forced && i === start) || (num < 1000 && (m[1] || (m[4] || "").length > 15))) : num === prevNum + 1);
       if (isStart) {
         close(); prevNum = num; mode = "front";
-        q = {num, front:(m[2] ?? m[4] ?? "").trim(), options:[], answer:null, comment:""};
+        if (pend && i - pend.i <= 3) section = pend.t;
+        pend = null;
+        q = {num, front:(m[2] ?? m[4] ?? "").trim(), options:[], answer:null, comment:"", section};
         continue;
       }
       if (!q) continue;
@@ -170,6 +219,7 @@ export function parseQuestions(text){
         if (a) { q.answer = a; mode = "after"; continue; } }
       // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
       // (no meio do comentário, só pula a linha: costuma ser o cabeçalho da página seguinte)
+      const st = sectionTitle(l); if (st) pend = {t:st, i};
       if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { if (mode !== "comment" && mode !== "after") mode = "skip"; continue; }
       const c = l.match(COMMENT);
       if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
@@ -195,7 +245,7 @@ export function parseQuestions(text){
   return qs.filter(q => q.front.length > 3).map(q => {
     const ans = q.answer || key[q.num] || null;
     const isCE = q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1]));
-    const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment};
+    const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment, subject:q.section || guessSubject([q.front, ...q.options, q.comment].join(" "))};
     if (isCE) out.answer = ans === "C" || ans === "E" ? ans : null;
     else { out.options = q.options.slice(0, 5); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
     return out;
