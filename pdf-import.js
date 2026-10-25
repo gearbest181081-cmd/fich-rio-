@@ -52,6 +52,8 @@ const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,
 const ALT = /^\(?([A-Ea-e])\s*[).\-–—]\s+(.*)$/;
 const GAB_LINE = /^(?:gabarito|resposta|resp\.)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–]?\s*(.*)$/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
+// instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
+const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;
 const NOISE = /^(?:p[áa]gina\s*\d+(\s*de\s*\d+)?|\d{1,3}|www\.\S+|-\s*\d+\s*-)$/i;
 
 function normAnswer(s){
@@ -67,9 +69,9 @@ function parseKey(lines){
   const pairRe = /(\d{1,3})\s*[\-–—.:)]?\s*(certo|errado|anulad[ao]|[a-e])(?![a-z])/gi;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    const nums = l.split(/\s+/);
+    const nums = l.replace(/^(?:ite(?:m|ns)|quest(?:[õo]es|[ãa]o)|n[º°o]\.?)\s*/i, "").split(/\s+/);
     if (nums.length > 1 && nums.every(n => /^\d{1,3}$/.test(n)) && lines[i+1]) {
-      const ans = lines[i+1].split(/\s+/);
+      const ans = lines[i+1].replace(/^(?:gabarito|respostas?|gab\.?)\s*:?\s*/i, "").split(/\s+/);
       if (ans.length === nums.length && ans.every(a => /^(?:[a-e]|certo|errado|x|\*|anulad[ao])$/i.test(a))) {
         nums.forEach((n, k) => { const a = normAnswer(ans[k]); if (a) key[+n] = a; }); i++; continue;
       }
@@ -79,8 +81,16 @@ function parseKey(lines){
   return key;
 }
 
+// gabarito vindo de outro PDF
+export function parseAnswerKey(text){
+  return parseKey(text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean));
+}
+
 export function parseQuestions(text){
   let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => l && !NOISE.test(l));
+  // cabeçalhos e rodapés que se repetem em várias páginas
+  const freq = {}; lines.forEach(l => freq[l] = (freq[l] || 0) + 1);
+  lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l)));
   // seção de gabarito no fim: última linha que é só "Gabarito..." e tem respostas depois
   let key = {};
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -105,6 +115,8 @@ export function parseQuestions(text){
       continue;
     }
     if (!q) continue;
+    // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
+    if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { mode = "skip"; continue; }
     const g = l.match(GAB_LINE);
     if (g && g[1] !== undefined) { const a = normAnswer(g[1].split(/\s/)[0]); if (a) { q.answer = a; mode = "after"; continue; } }
     const c = l.match(COMMENT);

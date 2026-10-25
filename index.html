@@ -204,7 +204,7 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
-import { extractPdfText, parseQuestions } from "./pdf-import.js";
+import { extractPdfText, parseQuestions, parseAnswerKey } from "./pdf-import.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager, doc, collection, setDoc, deleteDoc, updateDoc, getDoc, onSnapshot, query, where, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -904,7 +904,8 @@ function renderPdf(){
       <p><b>${it.length} questões encontradas</b> em ${esc(view.file)}: ${nMc} de múltipla escolha e ${nCe} de certo ou errado.</p>
       ${noKey ? `<p class="small" style="color:var(--warn)">${noKey} ${noKey === 1 ? "está" : "estão"} sem gabarito e ficaram desmarcadas. Escolha a resposta para incluir.</p>` : ""}
       <p class="small muted">Confira o texto, corrija o que precisar e toque em Importar. Elas vão para o baralho <b>${esc(deckName)}</b>.</p>
-      <div class="row"><button class="btn ghost small" data-act="pdfall" data-v="1">Marcar todas</button><button class="btn ghost small" data-act="pdfall" data-v="0">Desmarcar todas</button></div>
+      <div class="row"><button class="btn ghost small" data-act="pdfall" data-v="1">Marcar todas</button><button class="btn ghost small" data-act="pdfall" data-v="0">Desmarcar todas</button>${noKey ? `<label class="btn small" for="pdf-keyfile">Carregar gabarito de outro PDF</label><input type="file" id="pdf-keyfile" accept="application/pdf,.pdf" hidden>` : ""}</div>
+      <p id="pdf-keymsg" class="small muted" aria-live="polite"></p>
     </section>
     <div class="stack" style="gap:10px">${it.map((q, i) => {
       const has = q.type === "mc" ? q.correct != null : !!q.answer;
@@ -924,6 +925,18 @@ function renderPdf(){
     <p id="pdf-err" class="err" hidden></p>`;
   $app.querySelectorAll(".pdf-g").forEach(sel => sel.onchange = () => { if (sel.value !== "") document.getElementById("pdf-inc" + sel.dataset.i).checked = true; pdfCount(); });
   $app.querySelectorAll(".pdf-inc").forEach(c => c.onchange = pdfCount);
+  const kf = document.getElementById("pdf-keyfile");
+  if (kf) kf.onchange = async e => {
+    const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg"); msg.textContent = "Lendo o gabarito…";
+    try {
+      const key = parseAnswerKey(await extractPdfText(f)); let n = 0;
+      view.items.forEach((q, i) => { const a = key[q.num]; if (!a) return; if (q.type === "mc") { const k = "ABCDE".indexOf(a); if (k >= 0 && k < q.options.length && q.correct == null) { q.correct = k; n++; } } else if ((a === "C" || a === "E") && !q.answer) { q.answer = a; n++; } });
+      if (!n) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; return; }
+      // guarda o que já foi editado antes de redesenhar
+      view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
+      renderPdf(); toast(`Gabarito aplicado em ${n} questões`);
+    } catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler esse PDF.</span>`; }
+  };
   pdfCount();
 }
 function pdfCount(){ const n = document.querySelectorAll(".pdf-inc:checked").length; const b = document.getElementById("pdf-go"); if (b) { b.textContent = n ? `Importar ${n} ${n === 1 ? "questão" : "questões"}` : "Importar"; b.disabled = !n; } }
