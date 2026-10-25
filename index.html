@@ -186,6 +186,13 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 .who{font-size:.88rem;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.95rem;background:var(--sunk);padding:4px 8px;border-radius:6px;user-select:all;overflow-wrap:anywhere}
 .chip.shared{background:var(--warn-soft);color:var(--warn)}
+.deck .tw{display:flex;align-items:center;gap:6px;min-width:0}
+.fold{border:0;background:none;width:28px;height:28px;border-radius:6px;color:var(--muted);font-size:.8rem;flex:none}
+.fold:hover{background:var(--sunk);color:var(--ink)}
+.fold.none{visibility:hidden}
+.subs{display:flex;flex-direction:column}
+.crumbs{font-size:.85rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.crumbs button{border:0;background:none;padding:0;color:var(--accent);font-weight:700;font-size:inherit}
 </style>
 </head>
 <body>
@@ -401,7 +408,24 @@ async function seedExamples(){
 }
 
 /* ---------- contagens e estatísticas ---------- */
-const deckCards = id => Object.values(S.cards).filter(c => !id || c.deck === id);
+/* árvore de baralhos: baralho pessoal guarda "parent"; compartilhado guarda no perfil de cada um (tree) */
+const byCreated = (a, b) => (a.created||0) - (b.created||0);
+function parentOf(d){ if (!d) return null; const p = d.shared ? (S.profile.tree || {})[d.id] : d.parent; return p && p !== d.id && S.decks[p] ? p : null; }
+const childrenOf = id => Object.values(S.decks).filter(d => parentOf(d) === (id || null)).sort(byCreated);
+function descendants(id){ const out = new Set([id]); const walk = x => childrenOf(x).forEach(c => { if (!out.has(c.id)) { out.add(c.id); walk(c.id); } }); walk(id); return out; }
+function deckPath(id){ const parts = []; let d = S.decks[id], n = 0; while (d && n++ < 20) { parts.unshift(d.name); d = S.decks[parentOf(d)]; } return parts.join(" › "); }
+// lista em ordem de árvore, para menus: [{d, depth}]
+function deckTree(){ const out = []; const walk = (id, depth) => childrenOf(id).forEach(d => { out.push({d, depth}); walk(d.id, depth + 1); }); walk(null, 0); return out; }
+const deckOptions = (selected, exclude) => deckTree().filter(x => !exclude || !exclude.has(x.d.id)).map(({d, depth}) => `<option value="${d.id}" ${d.id === selected ? "selected" : ""}>${"\u00a0\u00a0\u00a0".repeat(depth)}${depth ? "↳ " : ""}${esc(d.name)}</option>`).join("");
+async function setParent(d, p){
+  p = p || null;
+  if (d.shared) { const tree = {...(S.profile.tree || {})}; if (p) tree[d.id] = p; else delete tree[d.id]; S.profile.tree = tree; return store.putProfile(); }
+  return store.putDeck({...d, parent:p});
+}
+const ownCards = id => Object.values(S.cards).filter(c => c.deck === id);
+const deckCards = id => { if (!id) return Object.values(S.cards); const ids = descendants(id); return Object.values(S.cards).filter(c => ids.has(c.deck)); };
+let collapsed = {}; try { collapsed = JSON.parse(localStorage.getItem("fichario-fechados") || "{}"); } catch(e){}
+function toggleCollapsed(id){ collapsed[id] = !collapsed[id]; try { localStorage.setItem("fichario-fechados", JSON.stringify(collapsed)); } catch(e){} }
 function counts(id){ const cs = deckCards(id); return {total:cs.length, due:cs.filter(isDue).length, nw:cs.filter(isNew).length}; }
 function streak(){ const log = S.profile.log || {}; let n = 0, t = Date.now(); if (!log[today(t)]) t -= DAY; while (log[today(t)] && log[today(t)][0] > 0) { n++; t -= DAY; } return n; }
 function acc7(){ const log = S.profile.log || {}; let s = 0, r = 0; for (let i = 0; i < 7; i++) { const e = log[today(Date.now() - i*DAY)]; if (e) { s += e[0]; r += e[1]; } } return s ? Math.round(r/s*100) : null; }
@@ -442,12 +466,13 @@ function renderHome(){
     </section>
     <div class="sec-h"><h2>Baralhos</h2><div class="row"><button class="btn ghost" data-act="joindeck">Entrar com código</button><button class="btn" data-act="newdeck">Novo baralho</button></div></div>
     <div id="newdeck" hidden class="panel" style="padding:12px;margin-bottom:12px"><form class="stack" id="fnewdeck" style="gap:10px"><div class="row"><input class="txt" id="newdeck-name" placeholder="Ex.: Direito Administrativo" style="flex:1;min-width:180px" required><button class="btn primary">Criar</button><button type="button" class="btn ghost" data-act="cancelnew">Cancelar</button></div>
+      <div class="row small" style="gap:8px"><label for="newdeck-parent">Dentro de</label><select class="txt" id="newdeck-parent" style="flex:1;min-width:160px;width:auto"><option value="">Nenhum (baralho principal)</option>${deckOptions(view.parent)}</select></div>
       <label class="row small" style="gap:8px"><input type="checkbox" id="newdeck-shared"> Compartilhado: outras pessoas entram com um código e estudam as mesmas cartas</label></form></div>
     <div id="joindeck" hidden class="panel" style="padding:12px;margin-bottom:12px"><form class="row" id="fjoin"><input class="txt" id="join-code" placeholder="Cole o código do baralho" style="flex:1;min-width:180px" required autocomplete="off"><button class="btn primary">Entrar</button><button type="button" class="btn ghost" data-act="canceljoin">Cancelar</button></form></div>
-    <div class="panel decks">${decks.length ? decks.map(d => { const c = counts(d.id); return `
+    <div class="panel decks">${decks.length ? deckTree().filter(({d}) => { let p = parentOf(d); while (p) { if (collapsed[p]) return false; p = parentOf(S.decks[p]); } return true; }).map(({d, depth}) => { const c = counts(d.id); const kids = childrenOf(d.id).length; return `
       <div class="deck"><span class="sw" style="background:${esc(d.color)}"></span>
-        <div style="min-width:0"><button class="name" data-act="open" data-id="${d.id}">${esc(d.name)}</button>
-          <div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}${c.due ? `<span class="chip due">${c.due} revisar</span>` : ""}${c.nw ? `<span class="chip new">${c.nw} novas</span>` : ""}<span class="chip">${c.total} cartas</span></div></div>
+        <div class="tw" style="padding-left:${depth * 18}px"><button class="fold ${kids ? "" : "none"}" data-act="fold" data-id="${d.id}" aria-label="${collapsed[d.id] ? "Abrir" : "Fechar"} ${esc(d.name)}" aria-expanded="${!collapsed[d.id]}">${collapsed[d.id] ? "▸" : "▾"}</button><div style="min-width:0"><button class="name" data-act="open" data-id="${d.id}">${esc(d.name)}</button>
+          <div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}${c.due ? `<span class="chip due">${c.due} revisar</span>` : ""}${c.nw ? `<span class="chip new">${c.nw} novas</span>` : ""}<span class="chip">${c.total} cartas</span>${kids ? `<span class="chip">${kids} ${kids === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div></div>
         <button class="btn ${c.due || c.nw ? "primary" : ""}" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button>
       </div>`; }).join("") : `<div class="empty"><h3>Nenhum baralho ainda</h3><p class="muted">Crie um baralho por matéria, como Constitucional ou Português, e adicione suas cartas.</p></div>`}</div>
     <p class="small muted" style="margin-top:14px">Dica: no celular, use "Adicionar à tela inicial" no menu do navegador para abrir o fichário como um app.</p>`;
@@ -455,11 +480,12 @@ function renderHome(){
   f.onsubmit = async e => {
     e.preventDefault(); const name = document.getElementById("newdeck-name").value.trim(); if (!name) return;
     const color = COLORS[Object.keys(S.decks).length % COLORS.length];
+    const parent = document.getElementById("newdeck-parent").value || null;
     if (document.getElementById("newdeck-shared").checked) {
-      try { const id = await store.createShared(name, color); go("deck", {id}); toast("Baralho compartilhado criado"); } catch(err){ console.error(err); toast("Não consegui criar o baralho compartilhado."); }
+      try { const id = await store.createShared(name, color); if (parent) { S.decks[id] = S.decks[id] || {id, shared:true}; await setParent(S.decks[id], parent); } go("deck", {id}); toast("Baralho compartilhado criado"); } catch(err){ console.error(err); toast("Não consegui criar o baralho compartilhado."); }
       return;
     }
-    const d = {id:uid(), name, color, created:Date.now()}; store.putDeck(d); go("deck", {id:d.id}); toast("Baralho criado");
+    const d = {id:uid(), name, color, created:Date.now(), parent}; store.putDeck(d); go("deck", {id:d.id}); toast(parent ? "Subbaralho criado" : "Baralho criado");
   };
   document.getElementById("fjoin").onsubmit = async e => {
     e.preventDefault(); const code = document.getElementById("join-code").value.trim().replace(/^s:/, "");
@@ -472,17 +498,23 @@ function renderHome(){
 function renderDeck(){
   const d = S.decks[view.id]; if (!d) return go("home");
   const c = counts(d.id); const q = (view.q || "").toLowerCase();
-  const list = deckCards(d.id).sort((a,b) => (b.created||0) - (a.created||0)).filter(x => !q || plain(x.front + " " + (x.back||"") + " " + (x.comment||"") + " " + (x.options||[]).join(" ") + " " + (x.tags||[]).join(" ")).toLowerCase().includes(q));
+  const subs = childrenOf(d.id);
+  const crumbs = []; { let p = parentOf(d), n = 0; while (p && n++ < 20) { crumbs.unshift(S.decks[p]); p = parentOf(S.decks[p]); } }
+  const list = ownCards(d.id).sort((a,b) => (b.created||0) - (a.created||0)).filter(x => !q || plain(x.front + " " + (x.back||"") + " " + (x.comment||"") + " " + (x.options||[]).join(" ") + " " + (x.tags||[]).join(" ")).toLowerCase().includes(q));
   $app.innerHTML = header() + `
-    <div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="home">← Baralhos</button></div>
+    <div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="${crumbs.length ? "open" : "home"}" data-id="${crumbs.length ? crumbs[crumbs.length-1].id : ""}">← ${crumbs.length ? esc(crumbs[crumbs.length-1].name) : "Baralhos"}</button></div>
+    ${crumbs.length ? `<div class="crumbs" style="margin-bottom:4px"><button data-act="home">Baralhos</button>${crumbs.map(x => `<span>›</span><button data-act="open" data-id="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}
     <div class="sec-h"><div style="min-width:0"><h2 id="dname">${esc(d.name)}</h2><div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}<span class="chip due">${c.due} revisar</span><span class="chip new">${c.nw} novas</span><span class="chip">${c.total} cartas</span></div></div>
-      <div class="row"><button class="btn ghost" data-act="pdf" data-id="${d.id}">Importar PDF</button><button class="btn" data-act="newcard">Nova carta</button><button class="btn primary" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button></div></div>
+      <div class="row"><button class="btn ghost" data-act="newsub">Novo subbaralho</button><button class="btn ghost" data-act="pdf" data-id="${d.id}">Importar PDF</button><button class="btn" data-act="newcard">Nova carta</button><button class="btn primary" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button></div></div>
     <div class="stack" style="margin-top:6px">
+      ${subs.length ? `<div><div class="label" style="margin-bottom:6px">Subbaralhos</div><div class="panel decks">${subs.map(x => { const cx = counts(x.id); const k = childrenOf(x.id).length; return `<div class="deck"><span class="sw" style="background:${esc(x.color)}"></span><div style="min-width:0"><button class="name" data-act="open" data-id="${x.id}">${esc(x.name)}</button><div class="chips">${x.shared ? `<span class="chip shared">compartilhado</span>` : ""}${cx.due ? `<span class="chip due">${cx.due} revisar</span>` : ""}${cx.nw ? `<span class="chip new">${cx.nw} novas</span>` : ""}<span class="chip">${cx.total} cartas</span>${k ? `<span class="chip">${k} ${k === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div><button class="btn ${cx.due || cx.nw ? "primary" : ""}" data-act="study" data-id="${x.id}" ${cx.due || cx.nw ? "" : "disabled"}>Estudar</button></div>`; }).join("")}</div>
+        <div class="label" style="margin:14px 0 0">Cartas deste baralho</div></div>` : ""}
       <input class="search" id="q" type="search" placeholder="Buscar nas cartas" value="${esc(view.q||"")}">
-      <div class="panel cards">${list.length ? list.map(x => `<button class="citem" data-act="edit" data-id="${x.id}"><span class="tchip">${TSHORT[x.type]}</span><span class="txt">${esc(plain(x.front).slice(0,160) || "(sem texto)")}</span><span class="chip ${isNew(x) ? "new" : isDue(x) ? "due" : ""}">${dueLabel(x)}</span></button>`).join("") : `<div class="empty"><p class="muted">${q ? "Nenhuma carta encontrada." : "Este baralho está vazio. Crie a primeira carta ou importe uma planilha."}</p></div>`}</div>
+      <div class="panel cards">${list.length ? list.map(x => `<button class="citem" data-act="edit" data-id="${x.id}"><span class="tchip">${TSHORT[x.type]}</span><span class="txt">${esc(plain(x.front).slice(0,160) || "(sem texto)")}</span><span class="chip ${isNew(x) ? "new" : isDue(x) ? "due" : ""}">${dueLabel(x)}</span></button>`).join("") : `<div class="empty"><p class="muted">${q ? "Nenhuma carta encontrada." : (subs.length ? "As cartas estão nos subbaralhos. Ao estudar esta pasta, entram todas." : "Este baralho está vazio. Crie a primeira carta ou importe uma planilha.")}</p></div>`}</div>
       <details class="panel" style="padding:12px 14px" ${d.shared ? "open" : ""}><summary style="cursor:pointer;font-weight:700">Opções do baralho</summary>
         <div class="stack" style="margin-top:12px">
           <form class="row" id="frename"><input class="txt" id="rename" value="${esc(d.name)}" style="flex:1;min-width:180px"><button class="btn">Renomear</button></form>
+          <form class="row" id="fmove"><label class="small" for="move-parent">Dentro de</label><select class="txt" id="move-parent" style="flex:1;min-width:160px;width:auto"><option value="">Nenhum (baralho principal)</option>${deckOptions(parentOf(d), descendants(d.id))}</select><button class="btn">Mover</button></form>
           ${d.shared ? `<div class="stack" style="gap:8px"><span class="label">Código de convite</span><div class="row"><span class="code" id="invite">${esc(d.sid)}</span><button type="button" class="btn" data-act="copycode">Copiar</button></div>
             <span class="hint">Mande esse código para quem vai estudar com você. A pessoa entra no Fichário, toca em "Entrar com código" e cola. Cada um tem a própria revisão, e todos podem criar e editar cartas.</span>
             <span class="label">Quem participa</span><span class="small">${Object.values(d.names || {}).map(esc).join(", ") || "Só você"}</span></div>` : ""}
@@ -491,6 +523,7 @@ function renderDeck(){
     </div>`;
   const qi = document.getElementById("q");
   qi.oninput = () => { view.q = qi.value; const pos = qi.selectionStart; renderDeck(); const n = document.getElementById("q"); n.focus(); n.setSelectionRange(pos,pos); };
+  document.getElementById("fmove").onsubmit = async e => { e.preventDefault(); const p = document.getElementById("move-parent").value || null; if (p === parentOf(d)) return; await setParent(d, p); renderDeck(); toast(p ? "Movido para " + S.decks[p].name : "Agora é um baralho principal"); };
   document.getElementById("frename").onsubmit = e => { e.preventDefault(); const n = document.getElementById("rename").value.trim(); if (n) { store.putDeck({...d, name:n, example:false}); renderDeck(); toast("Baralho renomeado"); } };
 }
 
@@ -561,7 +594,7 @@ function renderEdit(){
     <div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="canceledit">← Voltar</button></div>
     <h2 style="margin-bottom:14px">${editing ? "Editar carta" : "Nova carta"}</h2>
     <form class="stack" id="fcard">
-      <div class="field"><label class="label" for="e-deck">Baralho</label><select class="txt" id="e-deck">${decks.map(d => `<option value="${d.id}" ${d.id === c.deck ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select></div>
+      <div class="field"><label class="label" for="e-deck">Baralho</label><select class="txt" id="e-deck">${deckOptions(c.deck)}</select></div>
       <div class="field"><span class="label">Tipo</span><div class="seg" role="group" aria-label="Tipo de carta">${Object.entries(TYPES).map(([k,l]) => `<button type="button" data-act="type" data-t="${k}" aria-pressed="${c.type === k}">${l}</button>`).join("")}</div></div>
       <div class="field"><span class="label">${c.type === "basic" ? "Frente" : c.type === "ce" ? "Afirmação" : c.type === "mc" ? "Enunciado" : "Texto com lacunas"}</span>${rich("e-front", c.front, frontPh)}
         ${c.type === "cloze" ? `<span class="hint">Coloque entre chaves duplas o trecho que vai sumir na revisão: {{assim}}. Pode ter mais de uma lacuna.</span>` : ""}</div>
@@ -759,7 +792,7 @@ function exportCSV(deckId){
 }
 function renderIO(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
-  const opts = decks.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join("");
+  const opts = deckOptions();
   $app.innerHTML = header() + `
     <div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="home">← Baralhos</button></div>
     <h2 style="margin-bottom:14px">Importar e exportar</h2>
@@ -807,6 +840,7 @@ const NEWDECK = "__novo";
 function newDeckFields(prefix, suggested = ""){
   return `<div class="stack" id="${prefix}-new" hidden style="gap:8px">
     <input class="txt" id="${prefix}-newname" placeholder="Nome do novo baralho" value="${esc(suggested)}">
+    <div class="row small" style="gap:8px"><label for="${prefix}-newparent">Dentro de</label><select class="txt" id="${prefix}-newparent" style="flex:1;min-width:160px;width:auto"><option value="">Nenhum (baralho principal)</option>${deckOptions()}</select></div>
     <label class="row small" style="gap:8px"><input type="checkbox" id="${prefix}-newshared"> Compartilhado (outras pessoas entram com código)</label></div>`;
 }
 function wireNewDeck(prefix){
@@ -821,14 +855,15 @@ async function resolveDeck(prefix, fallbackName){
   const name = (document.getElementById(prefix + "-newname").value || fallbackName || "").trim();
   if (!name) return null;
   const color = COLORS[Object.keys(S.decks).length % COLORS.length];
-  if (document.getElementById(prefix + "-newshared").checked) return await store.createShared(name, color);
-  const d = {id:uid(), name, color, created:Date.now()}; await store.putDeck(d); return d.id;
+  const parent = document.getElementById(prefix + "-newparent").value || null;
+  if (document.getElementById(prefix + "-newshared").checked) { const id = await store.createShared(name, color); if (parent) { S.decks[id] = S.decks[id] || {id, shared:true}; await setParent(S.decks[id], parent); } return id; }
+  const d = {id:uid(), name, color, created:Date.now(), parent}; await store.putDeck(d); return d.id;
 }
 
 /* importar PDF */
 function renderPdf(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
-  const opts = decks.map(d => `<option value="${d.id}" ${d.id === view.deck ? "selected" : ""}>${esc(d.name)}</option>`).join("");
+  const opts = deckOptions(view.deck);
   const top = header() + `<div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="${view.deck ? "open" : "home"}" data-id="${view.deck || ""}">← Voltar</button></div><h2 style="margin-bottom:14px">Importar questões de PDF</h2>`;
   if (!view.items) {
     $app.innerHTML = top + `<section class="panel stack" style="padding:16px">
@@ -936,6 +971,8 @@ $app.addEventListener("click", e => {
     case "study": startStudy(id); break;
     case "studyall": startStudy(null); break;
     case "newdeck": { const p = document.getElementById("newdeck"); p.hidden = false; document.getElementById("newdeck-name").focus(); break; }
+    case "newsub": go("home", {parent:view.id}); setTimeout(() => { const p = document.getElementById("newdeck"); if (p) { p.hidden = false; document.getElementById("newdeck-name").focus(); } }, 0); break;
+    case "fold": toggleCollapsed(id); renderHome(); break;
     case "cancelnew": document.getElementById("newdeck").hidden = true; break;
     case "joindeck": { const p = document.getElementById("joindeck"); p.hidden = false; document.getElementById("join-code").focus(); break; }
     case "canceljoin": document.getElementById("joindeck").hidden = true; break;
@@ -953,9 +990,9 @@ $app.addEventListener("click", e => {
     case "askdelcard": document.getElementById("delcard").innerHTML = `<span class="confirm">Apagar esta carta? <button type="button" class="btn danger solid" data-act="delcard">Apagar</button><button type="button" class="btn ghost" data-act="nodelcard">Não</button></span>`; break;
     case "nodelcard": renderEdit(); break;
     case "delcard": { const dk = S.cards[view.id]?.deck; store.delCard(view.id); toast("Carta apagada"); go("deck", {id:dk}); break; }
-    case "askdel": document.getElementById("delzone").innerHTML = `<span class="confirm">Apagar o baralho e ${counts(view.id).total} cartas? Não dá para desfazer. <button class="btn danger solid" data-act="deldeck">Apagar</button><button class="btn ghost" data-act="nodel">Cancelar</button></span>`; break;
+    case "askdel": document.getElementById("delzone").innerHTML = `<span class="confirm">Apagar o baralho e ${ownCards(view.id).length} cartas?${childrenOf(view.id).length ? " Os subbaralhos não são apagados, eles sobem um nível." : ""} Não dá para desfazer. <button class="btn danger solid" data-act="deldeck">Apagar</button><button class="btn ghost" data-act="nodel">Cancelar</button></span>`; break;
     case "nodel": renderDeck(); break;
-    case "deldeck": { const did = view.id; (async () => { for (const c of deckCards(did)) await store.delCard(c.id); await store.delDeck(did); })(); toast("Baralho apagado"); go("home"); break; }
+    case "deldeck": { const did = view.id; const up = parentOf(S.decks[did]); const kids = childrenOf(did); (async () => { for (const k of kids) await setParent(k, up); for (const c of ownCards(did)) await store.delCard(c.id); await store.delDeck(did); })(); toast("Baralho apagado"); go(up ? "deck" : "home", {id:up}); break; }
     case "exitstudy": go(view.deck ? "deck" : "home", {id:view.deck}); break;
     case "reveal": reveal(); break;
     case "checkcloze": checkCloze(false); break;
