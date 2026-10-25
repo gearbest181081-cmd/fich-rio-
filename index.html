@@ -197,6 +197,7 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
+import { extractPdfText, parseQuestions } from "./pdf-import.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager, doc, collection, setDoc, deleteDoc, updateDoc, getDoc, onSnapshot, query, where, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -379,7 +380,7 @@ const store = (() => {
   };
 })();
 function onErr(e){ console.error(e); if (e && e.code === "permission-denied") toast("Sem permissão para ler parte dos dados."); }
-function refresh(){ if (["home","deck","io"].includes(view.name)) render(); }
+function refresh(){ if (["home","deck","io"].includes(view.name) || (view.name === "pdf" && !view.items && !view.busy)) render(); }
 
 /* ---------- exemplos na primeira abertura ---------- */
 async function seedExamples(){
@@ -423,6 +424,7 @@ function render(){
   else if (v === "edit") renderEdit();
   else if (v === "study") renderStudy();
   else if (v === "io") renderIO();
+  else if (v === "pdf") renderPdf();
 }
 function go(name, extra = {}){ view = {name, ...extra}; render(); window.scrollTo(0,0); }
 
@@ -430,7 +432,7 @@ function renderHome(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
   const all = counts(); const st = streak(); const ac = acc7();
   const toStudy = all.due + Math.min(all.nw, S.profile.newPerSession || 20);
-  $app.innerHTML = header(`<button class="btn ghost" data-act="io">Importar / exportar</button>`) + `
+  $app.innerHTML = header(`<button class="btn ghost" data-act="pdf">Importar PDF</button><button class="btn ghost" data-act="io">Importar / exportar</button>`) + `
     <section class="today" aria-label="Resumo do dia">
       <div class="first"><span class="label">Para hoje</span>
         <div class="row spread"><span class="big num">${toStudy}</span><button class="btn primary" data-act="studyall" ${toStudy ? "" : "disabled"}>Estudar tudo</button></div>
@@ -474,7 +476,7 @@ function renderDeck(){
   $app.innerHTML = header() + `
     <div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="home">← Baralhos</button></div>
     <div class="sec-h"><div style="min-width:0"><h2 id="dname">${esc(d.name)}</h2><div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}<span class="chip due">${c.due} revisar</span><span class="chip new">${c.nw} novas</span><span class="chip">${c.total} cartas</span></div></div>
-      <div class="row"><button class="btn" data-act="newcard">Nova carta</button><button class="btn primary" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button></div></div>
+      <div class="row"><button class="btn ghost" data-act="pdf" data-id="${d.id}">Importar PDF</button><button class="btn" data-act="newcard">Nova carta</button><button class="btn primary" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button></div></div>
     <div class="stack" style="margin-top:6px">
       <input class="search" id="q" type="search" placeholder="Buscar nas cartas" value="${esc(view.q||"")}">
       <div class="panel cards">${list.length ? list.map(x => `<button class="citem" data-act="edit" data-id="${x.id}"><span class="tchip">${TSHORT[x.type]}</span><span class="txt">${esc(plain(x.front).slice(0,160) || "(sem texto)")}</span><span class="chip ${isNew(x) ? "new" : isDue(x) ? "due" : ""}">${dueLabel(x)}</span></button>`).join("") : `<div class="empty"><p class="muted">${q ? "Nenhuma carta encontrada." : "Este baralho está vazio. Crie a primeira carta ou importe uma planilha."}</p></div>`}</div>
@@ -796,6 +798,90 @@ async function doImport(){
   if (errs.length) msg.innerHTML = `<p class="small"><b>${out.length} cartas importadas.</b> ${errs.length} linhas ignoradas:</p>` + errs.slice(0,8).map(e => `<p class="small muted">${esc(e)}</p>`).join("");
   else go("home");
 }
+
+/* importar PDF */
+function renderPdf(){
+  const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
+  const opts = decks.map(d => `<option value="${d.id}" ${d.id === view.deck ? "selected" : ""}>${esc(d.name)}</option>`).join("");
+  const top = header() + `<div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="${view.deck ? "open" : "home"}" data-id="${view.deck || ""}">← Voltar</button></div><h2 style="margin-bottom:14px">Importar questões de PDF</h2>`;
+  if (!view.items) {
+    $app.innerHTML = top + `<section class="panel stack" style="padding:16px">
+      <p class="small muted">Escolha a prova ou a lista de questões em PDF. O Fichário separa enunciado, alternativas e gabarito e mostra tudo para você conferir antes de salvar.</p>
+      <div class="field"><label class="label" for="pdf-deck">Salvar no baralho</label><select class="txt" id="pdf-deck"><option value="">Escolha…</option>${opts}</select></div>
+      <div class="row"><label class="btn primary" for="pdf-file" style="min-height:46px">Escolher PDF</label><input type="file" id="pdf-file" accept="application/pdf,.pdf" hidden></div>
+      <p id="pdf-msg" class="small muted" aria-live="polite"></p>
+      <details><summary class="small" style="cursor:pointer;font-weight:700">Que tipo de PDF funciona?</summary><div class="stack small muted" style="gap:6px;margin-top:8px">
+        <p>Questões numeradas (1., 1), Questão 1 ou 51 no estilo Cebraspe), com alternativas (A) a (E) ou itens de certo/errado.</p>
+        <p>O gabarito pode estar no fim do arquivo (1-C 2-A ou em tabela) ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Comentários depois de "Comentário:" também entram.</p>
+        <p>PDF escaneado (foto da página) não tem texto e não dá para ler. Questões sem gabarito aparecem para você marcar a resposta.</p></div></details>
+    </section>`;
+    document.getElementById("pdf-file").onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      const deck = document.getElementById("pdf-deck").value; const msg = document.getElementById("pdf-msg");
+      if (!deck) { msg.innerHTML = `<span class="err">Escolha o baralho primeiro.</span>`; e.target.value = ""; return; }
+      view.deck = deck; view.busy = true; msg.textContent = "Lendo o PDF…";
+      try {
+        const text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo página ${p} de ${n}…`; });
+        view.busy = false;
+        if (text.replace(/\s/g, "").length < 40) { msg.innerHTML = `<span class="err">Não encontrei texto nesse PDF. Ele parece ser escaneado (imagem), e esse tipo não dá para ler.</span>`; return; }
+        const items = parseQuestions(text);
+        if (!items.length) { msg.innerHTML = `<span class="err">Li o PDF, mas não reconheci questões numeradas nele.</span> Se quiser, mande o arquivo para o Claude converter em planilha e importe pela tela Importar / exportar.`; return; }
+        view.items = items; view.file = f.name; renderPdf();
+      } catch(err){ console.error(err); view.busy = false; msg.innerHTML = `<span class="err">Não consegui abrir esse PDF. Ele pode estar protegido por senha ou corrompido.</span>`; }
+    };
+    return;
+  }
+  const it = view.items;
+  const nMc = it.filter(q => q.type === "mc").length, nCe = it.length - nMc;
+  const noKey = it.filter(q => (q.type === "mc" ? q.correct == null : !q.answer)).length;
+  const deckName = S.decks[view.deck]?.name || "";
+  $app.innerHTML = top + `<section class="panel stack" style="padding:16px;margin-bottom:14px;gap:8px">
+      <p><b>${it.length} questões encontradas</b> em ${esc(view.file)}: ${nMc} de múltipla escolha e ${nCe} de certo ou errado.</p>
+      ${noKey ? `<p class="small" style="color:var(--warn)">${noKey} ${noKey === 1 ? "está" : "estão"} sem gabarito e ficaram desmarcadas. Escolha a resposta para incluir.</p>` : ""}
+      <p class="small muted">Confira o texto, corrija o que precisar e toque em Importar. Elas vão para o baralho <b>${esc(deckName)}</b>.</p>
+      <div class="row"><button class="btn ghost small" data-act="pdfall" data-v="1">Marcar todas</button><button class="btn ghost small" data-act="pdfall" data-v="0">Desmarcar todas</button></div>
+    </section>
+    <div class="stack" style="gap:10px">${it.map((q, i) => {
+      const has = q.type === "mc" ? q.correct != null : !!q.answer;
+      const gab = q.type === "mc"
+        ? `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option>${q.options.map((_, k) => `<option value="${k}" ${q.correct === k ? "selected" : ""}>${"ABCDE"[k]}</option>`).join("")}</select>`
+        : `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option><option value="C" ${q.answer === "C" ? "selected" : ""}>Certo</option><option value="E" ${q.answer === "E" ? "selected" : ""}>Errado</option></select>`;
+      return `<article class="panel stack" style="padding:12px 14px;gap:8px">
+        <div class="row spread"><label class="row" style="gap:8px;font-weight:700"><input type="checkbox" class="pdf-inc" id="pdf-inc${i}" data-i="${i}" ${has ? "checked" : ""}> Questão ${q.num} <span class="tchip">${TSHORT[q.type]}</span></label>${gab}</div>
+        <textarea class="txt typed-in" id="pdf-f${i}" rows="3" style="margin:0">${esc(q.front)}</textarea>
+        ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
+        ${q.comment ? `<p class="small muted"><b>Comentário:</b> ${esc(q.comment)}</p>` : ""}
+      </article>`; }).join("")}</div>
+    <div class="row spread" style="margin-top:16px;position:sticky;bottom:0;background:var(--bg);padding-block:10px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)">
+      <button class="btn" data-act="pdfagain">Escolher outro PDF</button>
+      <button class="btn primary" id="pdf-go" data-act="pdfimport" style="min-height:46px">Importar</button>
+    </div>
+    <p id="pdf-err" class="err" hidden></p>`;
+  $app.querySelectorAll(".pdf-g").forEach(sel => sel.onchange = () => { if (sel.value !== "") document.getElementById("pdf-inc" + sel.dataset.i).checked = true; pdfCount(); });
+  $app.querySelectorAll(".pdf-inc").forEach(c => c.onchange = pdfCount);
+  pdfCount();
+}
+function pdfCount(){ const n = document.querySelectorAll(".pdf-inc:checked").length; const b = document.getElementById("pdf-go"); if (b) { b.textContent = n ? `Importar ${n} ${n === 1 ? "questão" : "questões"}` : "Importar"; b.disabled = !n; } }
+async function pdfImport(){
+  const it = view.items, deck = view.deck, err = document.getElementById("pdf-err");
+  const cards = [], missing = [];
+  it.forEach((q, i) => {
+    if (!document.getElementById("pdf-inc" + i).checked) return;
+    const g = document.getElementById("pdf-g" + i).value;
+    const front = esc(document.getElementById("pdf-f" + i).value.trim()).replace(/\n/g, "<br>");
+    if (g === "") { missing.push(q.num); return; }
+    const c = {deck, type:q.type, front, comment:q.comment ? esc(q.comment) : "", tags:[]};
+    if (q.type === "mc") { c.options = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim()).filter(Boolean); c.correct = Math.min(+g, c.options.length - 1); }
+    else c.answer = g;
+    cards.push(c);
+  });
+  if (missing.length) { err.textContent = `Falta o gabarito da${missing.length > 1 ? "s questões" : " questão"} ${missing.join(", ")}. Escolha a resposta ou desmarque.`; err.hidden = false; return; }
+  const btn = document.getElementById("pdf-go"); btn.disabled = true; btn.textContent = "Importando…";
+  const t = Date.now();
+  for (let i = 0; i < cards.length; i++) await store.putCard({id:mkId(deck), created:t+i, reps:0, ivl:0, ease:2.5, due:0, ...cards[i]});
+  toast(`${cards.length} questões importadas`);
+  go("deck", {id:deck});
+}
 async function doExport(){
   const deckId = document.getElementById("ex-deck").value; const csv = exportCSV(deckId); const out = document.getElementById("ex-out");
   const name = "fichario-" + (deckId ? (S.decks[deckId].name.toLowerCase().normalize("NFD").replace(/[^\w]+/g, "-").replace(/^-|-$/g, "")) : "todos") + "-" + today() + ".csv";
@@ -811,6 +897,10 @@ $app.addEventListener("click", e => {
   switch (a) {
     case "home": go("home"); break;
     case "io": go("io"); break;
+    case "pdf": go("pdf", {deck:id || ""}); break;
+    case "pdfagain": go("pdf", {deck:view.deck}); break;
+    case "pdfimport": pdfImport(); break;
+    case "pdfall": document.querySelectorAll(".pdf-inc").forEach(c => c.checked = b.dataset.v === "1"); pdfCount(); break;
     case "open": go("deck", {id}); break;
     case "study": startStudy(id); break;
     case "studyall": startStudy(null); break;
