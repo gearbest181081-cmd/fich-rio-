@@ -33,9 +33,17 @@ function pageLines(items, width){
   return out;
 }
 
-export async function extractPdfText(file, onProgress){
+let lastDoc = null, lastFile = null;
+async function openDoc(file){
+  if (lastFile === file && lastDoc) return lastDoc;
   const pdfjs = await loadPdfjs();
-  const doc = await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+  lastDoc = await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise; lastFile = file;
+  return lastDoc;
+}
+export async function pdfPageCount(file){ return (await openDoc(file)).numPages; }
+
+export async function extractPdfText(file, onProgress){
+  const doc = await openDoc(file);
   const lines = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
@@ -102,6 +110,8 @@ export function parseQuestions(text){
   }
   // separa alternativas que vieram na mesma linha: "(A) x (B) y"
   lines = lines.flatMap(l => ALT.test(l) && /\s\(?[B-E]\s*[).]\s/.test(l) ? l.split(/\s(?=\(?[B-E]\s*[).]\s)/) : [l]);
+  // "(A)" no meio da linha (comum no OCR): quebra antes de cada alternativa entre parênteses
+  lines = lines.flatMap(l => /\S\s+\([A-E]\)\s/.test(l) ? l.split(/\s+(?=\([A-E]\)\s)/) : [l]);
 
   const qs = []; let q = null, mode = "front", prevNum = null;
   const close = () => { if (q) qs.push(q); };
@@ -137,4 +147,56 @@ export function parseQuestions(text){
     else { out.options = q.options.slice(0, 5); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
     return out;
   });
+}
+
+/* ---------- PDF escaneado: leitura por imagem (tesseract.js em vendor/tesseract) ---------- */
+let tessReady = null;
+function loadTesseract(){
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (!tessReady) tessReady = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = new URL("vendor/tesseract/tesseract.min.js", document.baseURI).href;
+    s.onload = () => res(window.Tesseract); s.onerror = () => { tessReady = null; rej(new Error("tesseract")); };
+    document.head.appendChild(s);
+  });
+  return tessReady;
+}
+let ocrWorker = null, ocrCancel = false;
+export function cancelOcr(){ ocrCancel = true; if (ocrWorker) { ocrWorker.terminate(); ocrWorker = null; } }
+// onProgress(página atual, total, fração da página)
+export async function ocrPdf(file, from, to, onProgress){
+  ocrCancel = false;
+  const doc = await openDoc(file);
+  const T = await loadTesseract();
+  const base = new URL("vendor/tesseract/", document.baseURI).href;
+  let cur = 0;
+  ocrWorker = await T.createWorker("por", 1, {
+    workerPath: base + "worker.min.js", corePath: base + "core", langPath: base + "lang", gzip: true,
+    logger: m => { if (m.status === "recognizing text") onProgress && onProgress(cur, to - from + 1, m.progress); },
+  });
+  const out = [];
+  try {
+    for (let p = from; p <= to; p++) {
+      if (ocrCancel) break;
+      cur = p - from + 1; onProgress && onProgress(cur, to - from + 1, 0);
+      const page = await doc.getPage(p);
+      const vp1 = page.getViewport({scale:1});
+      const scale = Math.min(2.5, 1800 / vp1.width);
+      const vp = page.getViewport({scale});
+      const cv = document.createElement("canvas"); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
+      await page.render({canvasContext:cx, viewport:vp}).promise;
+      if (ocrCancel) break;
+      let data;
+      try { ({data} = await ocrWorker.recognize(cv, {}, {text:true, blocks:true})); } catch(e){ if (ocrCancel) break; throw e; }
+      // usa a posição de cada palavra para separar colunas, como no PDF com texto
+      const words = [];
+      (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(pa => (pa.lines || []).forEach(l => (l.words || []).forEach(w => {
+        if (w.text && w.text.trim()) words.push({str:w.text, width:w.bbox.x1 - w.bbox.x0, transform:[1, 0, 0, w.bbox.y1 - w.bbox.y0, w.bbox.x0, cv.height - w.bbox.y1]});
+      }))));
+      out.push(words.length ? pageLines(words, cv.width).join("\n") : data.text);
+      cv.width = cv.height = 0;
+    }
+  } finally { if (ocrWorker) { await ocrWorker.terminate(); ocrWorker = null; } }
+  return out.join("\n");
 }
