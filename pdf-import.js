@@ -197,12 +197,12 @@ export function parseQuestions(text){
   lines = lines.flatMap(l => /\S\s+\([A-E]\)\s/.test(l) ? l.split(/\s+(?=\([A-E]\)\s)/) : [l]);
 
   // lê as questões a partir de uma linha, exigindo numeração em sequência (1, 2, 3...)
-  const runFrom = (start, forced = true) => {
+  const runFrom = (start, forced = true, end = lines.length) => {
     const qs = []; let q = null, mode = "front", prevNum = null, section = "", pend = null;
     const close = () => { if (q) qs.push(q); };
     // título de matéria logo antes da primeira questão
     for (let k = start - 1; k >= Math.max(0, start - 3); k--) { const t = sectionTitle(lines[k]); if (t) { section = t; break; } }
-    for (let i = start; i < lines.length; i++) {
+    for (let i = start; i < end; i++) {
       const l = lines[i];
       const m = l.match(QSTART);
       const num = m ? +(m[1] || m[3]) : null;
@@ -254,6 +254,23 @@ export function parseQuestions(text){
   let qs = [], best = -1;
   for (const st of starts) { const r = runFrom(st); const sc = score(r); if (sc > 0 && sc >= best) { best = sc; qs = r; } }
   if (best <= 0) qs = runFrom(0, false);
+  // provas com cabeçalho forte em cada questão ("42. (FGV/Exame...)"): corta o texto em cada cabeçalho, sem depender
+  // da sequência. Serve quando a leitura erra números ou há sumário com a lista das questões.
+  const strong = [];
+  lines.forEach((l, i) => { if (BANCA.test(l) && (QSTART.test(l) || !/^\d/.test(l))) strong.push(i); });
+  if (strong.length >= 5) {
+    const byNum = new Map(); let last = 0;
+    strong.forEach((st, k) => {
+      const m = lines[st].match(QSTART);
+      const r = runFrom(st, true, strong[k + 1] ?? lines.length)[0]; if (!r) return;
+      r.num = m ? +(m[1] || m[3]) : last + 1;
+      last = r.num;
+      const sc = score([r]), old = byNum.get(r.num);
+      if (!old || sc > score([old])) byNum.set(r.num, r);
+    });
+    const alt = [...byNum.values()].filter(q => q.options.length >= 2 || q.answer || q.front.length >= 60).sort((a, b) => a.num - b.num);
+    if (score(alt) > score(qs)) qs = alt;
+  }
 
   return qs.filter(q => q.front.length > 3).map(q => {
     const ans = q.answer || key[q.num] || null;
