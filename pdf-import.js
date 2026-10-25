@@ -58,7 +58,8 @@ export async function extractPdfText(file, onProgress){
 /* ---------- interpretação do texto ---------- */
 const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,3})\s*(?:[.)\-–—:]|\s)\s*(.*)$/i;
 const ALT = /^\(?([A-Ea-e])\s*[).\-–—]\s+(.*)$/;
-const GAB_LINE = /^(?:gabarito|resposta|resp\.)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–]?\s*(.*)$/i;
+// gabarito logo depois da questão: "Gabarito: B", "GABARITO: LETRA C", "Gab. C", "Resposta correta: (B)", "Alternativa correta: letra B"
+const GAB_LINE = /^(?:gabarito|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:\-–]?\s*\(?(certo|errado|[a-e])\)?(?![a-zà-ú])/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
 // instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
 const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;
@@ -123,7 +124,7 @@ export function parseQuestions(text){
   const kept = []; let inKey = false;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/^gabaritos?\b/i.test(l) && !/^gabarito\s*[:\-–]?\s*(?:certo|errado|[a-e])\.?$/i.test(l)) {
+    if (/^gabaritos?\b/i.test(l) && !GAB_LINE.test(l)) {
       inKey = true; addPairs(l.replace(/^gabaritos?\s*(?:oficial|definitivo|preliminar)?\s*[:\-–]?\s*/i, "")); continue;
     }
     const nums = l.replace(/^(?:ite(?:m|ns)|quest(?:[õo]es|[ãa]o)|n[º°o]\.?)\s*/i, "").split(/\s+/);
@@ -158,10 +159,10 @@ export function parseQuestions(text){
         continue;
       }
       if (!q) continue;
+      const g = l.match(GAB_LINE);
+      if (g) { const a = normAnswer(g[1]); if (a) { q.answer = a; mode = "after"; continue; } }
       // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
       if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { mode = "skip"; continue; }
-      const g = l.match(GAB_LINE);
-      if (g && g[1] !== undefined) { const a = normAnswer(g[1].split(/\s/)[0]); if (a) { q.answer = a; mode = "after"; continue; } }
       const c = l.match(COMMENT);
       if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
       const a = l.match(ALT);
