@@ -494,7 +494,8 @@ function renderHome(){
         <button class="btn ${c.due || c.nw ? "primary" : ""}" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button>
       </div>`; }).join("") : `<div class="empty"><h3>Nenhum baralho ainda</h3><p class="muted">Crie um baralho por matéria, como Constitucional ou Português, e adicione suas cartas.</p></div>`}</div>
     <p class="small muted" style="margin-top:14px">Dica: no celular, use "Adicionar à tela inicial" no menu do navegador para abrir o fichário como um app.</p>
-    ${usageLine()}`;
+    ${usageLine()}
+    <p class="hint" style="margin-top:2px">Versão ${APP_VERSION}</p>`;
   const f = document.getElementById("fnewdeck");
   f.onsubmit = async e => {
     e.preventDefault(); const name = document.getElementById("newdeck-name").value.trim(); if (!name) return;
@@ -918,7 +919,7 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
-const APP_VERSION = "15"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "16"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
