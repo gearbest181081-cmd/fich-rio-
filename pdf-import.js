@@ -66,6 +66,7 @@ const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,
 const ALT = /^\(?([A-Ea-e])\s*[).\-–—]\s+(.*)$/;
 // gabarito logo depois da questão: "Gabarito: B", "GABARITO: LETRA C", "Gab. C", "Resposta correta: (B)", "Alternativa correta: letra B"
 const GAB_LINE = /^(?:g[a4]b[a4]r[i1l|!][t7][o0]|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:;,\-–]?\s*\(?(certo|errado|[a-e8])\)?(?![a-zà-ú\d])/i;
+const BANCA = /^\S{0,6}\s*\((?:FGV|CESPE|CEBRASPE|FCC|VUNESP|IBFC|IDECAN|AOCP|QUADRIX|CESGRANRIO|FUNDATEC|CONSULPLAN|IADES|FEPESE|FUNRIO|IBADE|AVANÇA ?SP|INSTITUTO|SELECON|OBJETIVA|FUMARC|COPS|NC-UFPR|COMPERVE|CETRO|ESAF|FUNCAB|IDIB|ITAME|INSTITUTO AOCP)[\s\/)\-–]/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
 // instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
 const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;
@@ -150,7 +151,7 @@ export function parseQuestions(text){
     if (t.length < 5 || t.length > 60 || /[a-zà-ú]/.test(t) || !/[A-ZÀ-Ú]{4}/.test(t) || /\d/.test(t) || GAB_LINE.test(t) || COMMENT.test(t) || INSTR.test(t) || /^(?:QUEST[ÕO]ES|GABARITO|COMENT[ÁA]RIOS?|ATEN[ÇC][ÃA]O|INSTRU[ÇC][ÕO]ES)\b/.test(t) || /(?:^|\s)(?:PROVA|SIMULADO|CADERNO|CONCURSO|CARGO|EDITAL|TRIBUNAL|BANCA|APOSTILA)(?:\s|$)|\s[-–—|]\s/.test(t)) return "";
     return titleCase(t);
   };
-  lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !GAB_LINE.test(l) && !COMMENT.test(l)));
+  lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !BANCA.test(l) && !GAB_LINE.test(l) && !COMMENT.test(l)));
   // sumário/índice: linhas com pontilhado até o número da página e o bloco logo abaixo do título "Sumário"
   const TOC_LINE = /(?:\.\s?){4,}\s*\d{1,4}$|…+\s*\d{1,4}$|_{4,}\s*\d{1,4}$/;
   const tocKept = []; let inToc = false;
@@ -205,7 +206,19 @@ export function parseQuestions(text){
       const l = lines[i];
       const m = l.match(QSTART);
       const num = m ? +(m[1] || m[3]) : null;
-      const isStart = m && (prevNum === null ? ((forced && i === start) || (num < 1000 && (m[1] || (m[4] || "").length > 15))) : num === prevNum + 1);
+      // "42. (FGV/...)" com o número mal lido: a banca entre parênteses no começo da linha também abre questão
+      const banca = BANCA.test(l);
+      let isStart = m && (prevNum === null ? ((forced && i === start) || (num < 1000 && (m[1] || (m[4] || "").length > 15))) : num === prevNum + 1);
+      // pulo de até 3 números (questão anulada ou número ilegível no meio) só quando a linha tem cara forte de início de questão
+      if (!isStart && m && prevNum !== null && num > prevNum + 1 && num <= prevNum + 4 && (banca || m[1])) isStart = true;
+      if (!isStart && !m && banca && prevNum !== null && mode !== "front") { isStart = true; }
+      if (isStart && !m) {
+        close(); prevNum = prevNum + 1; mode = "front";
+        if (pend && i - pend.i <= 3) section = pend.t;
+        pend = null;
+        q = {num:prevNum, front:l.replace(/^[^(]*/, "").trim(), options:[], answer:null, comment:"", section};
+        continue;
+      }
       if (isStart) {
         close(); prevNum = num; mode = "front";
         if (pend && i - pend.i <= 3) section = pend.t;
