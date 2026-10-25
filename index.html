@@ -6,6 +6,7 @@
 <title>Fichário de Concurso</title>
 <meta name="description" content="Flashcards para concurso: certo ou errado, múltipla escolha, lacunas e revisão espaçada.">
 <meta name="theme-color" content="#1d5c88">
+<script>try{var t=localStorage.getItem("fich-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -129,6 +130,39 @@ textarea.txt{min-height:120px;font-family:ui-monospace,Menlo,Consolas,monospace;
 mark,.content mark{background:var(--mark);color:var(--mark-ink);padding:0 2px;border-radius:2px}
 /* revisão: ficha pautada */
 .study-top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.welcome{padding:18px;margin-bottom:16px;border-left:4px solid var(--accent)}
+.welcome h2{margin:0 0 8px;font-size:1.2rem}
+.welcome ol{margin:0 0 14px;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.stats.wide{display:flex;flex-wrap:wrap;max-width:none;margin:12px 0 16px}
+.stats.wide .stat{text-align:center;flex:1 1 88px}
+.stable{padding:4px 0;overflow:hidden}
+.srow{display:grid;grid-template-columns:minmax(0,1fr) 64px 44px 40px 48px;gap:8px;align-items:center;padding:9px 12px;border-top:1px solid var(--line)}
+.srow:first-child{border-top:0}
+.srow.head{font-size:.75rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.srow .sname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .sp,.srow .sn,.srow .st{text-align:right}
+.sbar{height:6px;border-radius:99px;background:var(--sunk);overflow:hidden}
+.sbar i{display:block;height:100%;background:var(--muted)}
+.sbar.ok i{background:var(--good)}.sbar.mid i{background:var(--warn)}.sbar.low i{background:var(--bad)}
+.chip.bad{background:var(--bad-soft);color:var(--bad)}
+.linkbtn{border:0;background:none;padding:0;color:var(--accent);font-weight:700;text-decoration:underline;cursor:pointer}
+.choice.picked{border-color:var(--accent);background:var(--accent-soft)}
+.choice.picked .l{color:var(--accent)}
+.confirm.neutral{background:var(--accent-soft);color:var(--ink)}
+#simclock.late{color:var(--bad);font-weight:700}
+.simmap{margin-top:14px}
+.simmap summary{cursor:pointer;font-weight:700;color:var(--muted)}
+.simmap .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(40px,1fr));gap:6px;margin-top:8px}
+.simmap .grid button{min-height:38px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-weight:700;color:var(--muted)}
+.simmap .grid button.done{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.simmap .grid button.cur{outline:2px solid var(--accent)}
+.score{font-family:var(--display);font-size:3rem;line-height:1.1;margin:8px 0 2px}
+.score.ok{color:var(--good)}.score.mid{color:var(--warn)}.score.low{color:var(--bad)}
+.alts{list-style:none;padding:0;margin:6px 0;display:flex;flex-direction:column;gap:4px;font-size:.93rem}
+.alts li{padding:5px 8px;border-radius:6px}
+.alts li.right{background:var(--good-soft);color:var(--good)}
+.alts li.wrong{background:var(--bad-soft);color:var(--bad);text-decoration:line-through}
+@media (max-width:420px){.srow{grid-template-columns:minmax(0,1fr) 54px 30px 44px}.srow .sbar,.srow.head>span:nth-child(2){display:none}}
 .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;max-width:360px;margin:18px auto}
 .stats .stat{background:var(--sunk);border-radius:var(--r);padding:12px 8px;display:flex;flex-direction:column;gap:2px}
 .stats b{font-size:1.35rem}
@@ -466,10 +500,22 @@ const deckCards = id => { if (!id) return Object.values(S.cards); const ids = de
 function counts(id){ const cs = deckCards(id); return {total:cs.length, due:cs.filter(isDue).length, nw:cs.filter(isNew).length}; }
 function streak(){ const log = S.profile.log || {}; let n = 0, t = Date.now(); if (!log[today(t)]) t -= DAY; while (log[today(t)] && log[today(t)][0] > 0) { n++; t -= DAY; } return n; }
 function acc7(){ const log = S.profile.log || {}; let s = 0, r = 0; for (let i = 0; i < 7; i++) { const e = log[today(Date.now() - i*DAY)]; if (e) { s += e[0]; r += e[1]; } } return s ? Math.round(r/s*100) : null; }
-function logReview(right){
-  const log = {...(S.profile.log || {})}; const k = today(); const e = log[k] ? [...log[k]] : [0,0]; e[0]++; if (right) e[1]++; log[k] = e;
+// log do dia: [vistas, acertos, novas, ms somados, respostas com tempo]
+const newPerDay = () => { const n = S.profile.newPerDay ?? S.profile.newPerSession ?? 20; return Math.max(0, +n || 0); };
+const newLeft = () => Math.max(0, newPerDay() - (((S.profile.log || {})[today()] || [])[2] || 0));
+const studyable = c => c.due + Math.min(c.nw, newLeft());
+// desempenho por baralho (matéria): [respondidas, acertos, ms somados, respostas com tempo]
+function addDeckStat(dstats, deck, right, ms){
+  const e = dstats[deck] ? [...dstats[deck]] : [0,0,0,0]; e[0]++; if (right) e[1]++; if (ms > 0 && ms < 30 * MIN) { e[2] += Math.round(ms); e[3]++; } dstats[deck] = e;
+}
+function logReview(right, wasNew, deck, ms){
+  const log = {...(S.profile.log || {})}; const k = today(); const e = log[k] ? [...log[k]] : [0,0];
+  while (e.length < 5) e.push(0);
+  e[0]++; if (right) e[1]++; if (wasNew) e[2]++; if (ms > 0 && ms < 30 * MIN) { e[3] += Math.round(ms); e[4]++; } log[k] = e;
   const keys = Object.keys(log).sort(); while (keys.length > 120) delete log[keys.shift()];
-  S.profile.log = log; store.putProfile();
+  S.profile.log = log;
+  if (deck) { const ds = {...(S.profile.dstats || {})}; addDeckStat(ds, deck, right, ms); S.profile.dstats = ds; }
+  store.putProfile();
 }
 
 /* ---------- telas ---------- */
@@ -479,8 +525,10 @@ function header(){
   const ini = nm.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "?";
   return `<div class="top"><button class="brand" data-act="home" aria-label="Ir para o início">${logo}<h1>Fichário</h1></button>${me ? `<details class="menu"><summary aria-label="Menu da conta">${esc(ini)}</summary><div class="menu-pop">
     <div class="who-full"><b>${esc(me.name || "")}</b><br><span class="muted">${esc(me.email || "")}</span></div>
+    <button data-act="stats">Desempenho</button>
     <button data-act="pdf">Importar questões de PDF</button>
     <button data-act="io">Planilha e backup</button>
+    <button data-act="prefs">Preferências</button>
     <button data-act="logout">Sair da conta</button></div></details>` : ""}</div>`;
 }
 
@@ -490,7 +538,7 @@ function deckRow(d, selSet){
   return `<div class="deck ${selSet ? "sel" : ""}">${selSet ? `<input type="checkbox" class="dselc" data-id="${d.id}" ${selSet.has(d.id) ? "checked" : ""} aria-label="Selecionar ${esc(d.name)}">` : `<span class="sw" style="background:${esc(d.color)}"></span>`}
     <div style="min-width:0"><button class="name" data-act="${selSet ? "dseltoggle" : "open"}" data-id="${d.id}">${esc(d.name)}</button>
       <div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}${c.due ? `<span class="chip due">${c.due} revisar</span>` : ""}${c.nw ? `<span class="chip new">${c.nw} novas</span>` : ""}<span class="chip">${c.total} ${c.total === 1 ? "carta" : "cartas"}</span>${kids ? `<span class="chip">${kids} ${kids === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div>
-    ${selSet ? "<span></span>" : `<button class="btn ${c.due || c.nw ? "primary" : ""}" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button>`}
+    ${selSet ? "<span></span>" : `<button class="btn ${studyable(c) ? "primary" : ""}" data-act="study" data-id="${d.id}" ${studyable(c) ? "" : "disabled"}>Estudar</button>`}
   </div>`;
 }
 // barra do modo de seleção de baralhos
@@ -507,6 +555,11 @@ function render(){
   else if (v === "study") renderStudy();
   else if (v === "io") renderIO();
   else if (v === "pdf") renderPdf();
+  else if (v === "prefs") renderPrefs();
+  else if (v === "stats") renderStats();
+  else if (v === "simsetup") renderSimSetup();
+  else if (v === "sim") renderSim();
+  else if (v === "simres") renderSimRes();
 }
 function go(name, extra = {}){ view = {name, ...extra}; render(); window.scrollTo(0,0); }
 
@@ -523,13 +576,13 @@ function usageLine(){
 function renderHome(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
   const all = counts(); const st = streak(); const ac = acc7();
-  const toStudy = all.due + Math.min(all.nw, S.profile.newPerSession || 20);
+  const toStudy = studyable(all);
   const tops = childrenOf(null), dsel = view.dsel || null;
-  $app.innerHTML = header() + `
+  $app.innerHTML = header() + welcomePanel() + `
     <section class="today" aria-label="Resumo do dia">
       <div class="first"><span class="label">Para hoje</span>
         <div class="row spread"><span class="big num">${toStudy}</span><button class="btn primary" data-act="studyall" ${toStudy ? "" : "disabled"}>Estudar tudo</button></div>
-        <span class="small muted num">${all.due} para revisar · ${Math.min(all.nw, S.profile.newPerSession||20)} novas</span></div>
+        <span class="small muted num">${all.due} para revisar · ${Math.min(all.nw, newLeft())} novas${all.nw && !newLeft() ? ` (as ${newPerDay()} novas de hoje já foram)` : ""}</span></div>
       <div><span class="label">Sequência</span><span class="big num">${st}</span><span class="small muted">${st === 1 ? "dia seguido" : "dias seguidos"}</span></div>
       <div><span class="label">Acerto 7 dias</span><span class="big num">${ac === null ? "–" : ac + "%"}</span><span class="small muted num">${all.total} cartas no total</span></div>
     </section>
@@ -584,8 +637,8 @@ function renderDeck(){
     ${crumbs.length > 1 ? `<div class="crumbs" style="margin-bottom:4px"><button data-act="home">Baralhos</button>${crumbs.map(x => `<span>›</span><button data-act="open" data-id="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}
     <h2 id="dname" style="font-size:1.45rem">${esc(d.name)}</h2>
     <div class="chips" style="margin:6px 0 14px">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}<span class="chip due">${c.due} revisar</span><span class="chip new">${c.nw} novas</span><span class="chip">${c.total} ${c.total === 1 ? "carta" : "cartas"}</span></div>
-    <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:nowrap"><button class="btn primary" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"} style="flex:1;min-height:46px">${c.due || c.nw ? "Estudar" : "Nada para estudar hoje"}</button><button class="btn" data-act="newcard" style="min-height:46px">+ Nova carta</button></div>
-    <div class="actions"><button class="btn" data-act="pdf" data-id="${d.id}">Importar PDF</button><button class="btn" data-act="newsub">+ Subbaralho</button></div>
+    <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:nowrap"><button class="btn primary" data-act="study" data-id="${d.id}" ${studyable(c) ? "" : "disabled"} style="flex:1;min-height:46px">${studyable(c) ? `Estudar (${studyable(c)})` : "Nada para estudar hoje"}</button><button class="btn" data-act="newcard" style="min-height:46px">+ Nova carta</button></div>
+    <div class="actions"><button class="btn" data-act="simsetup" data-id="${d.id}">Simulado</button><button class="btn" data-act="pdf" data-id="${d.id}">Importar PDF</button><button class="btn" data-act="newsub">+ Subbaralho</button></div>
     <form id="fnewsub" hidden class="panel row" style="padding:12px;margin-bottom:12px"><input class="txt" id="newsub-name" placeholder="Nome do subbaralho. Ex.: Crase" style="flex:1;min-width:180px" required><button class="btn primary">Criar</button><button type="button" class="btn ghost" data-act="cancelsub">Cancelar</button></form>
     ${subs.length ? `<div class="list-h"><span class="label">Subbaralhos (${subs.length})</span>${dsel ? "" : `<button class="btn ghost small" data-act="dselstart">Selecionar para apagar</button>`}</div>
       ${deckSelBar(subs.map(x => x.id))}
@@ -737,12 +790,12 @@ function saveCard(another){
 function buildQueue(deckId){
   const cs = deckCards(deckId);
   const due = cs.filter(isDue).sort((a,b) => a.due - b.due);
-  const nw = cs.filter(isNew).sort((a,b) => (a.created||0) - (b.created||0)).slice(0, S.profile.newPerSession || 20);
+  const nw = cs.filter(isNew).sort((a,b) => (a.created||0) - (b.created||0)).slice(0, newLeft());
   const q = [...due, ...nw].map(c => c.id);
   for (let i = q.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i+1)); [q[i], q[j]] = [q[j], q[i]]; }
   return q;
 }
-function startStudy(deckId){ const q = buildQueue(deckId); if (!q.length) return toast("Nada para estudar agora."); go("study", {deck:deckId, queue:q, i:0, seen:0, right:0, firstSeen:{}, total:q.length, t0:Date.now(), times:[]}); }
+function startStudy(deckId){ const q = buildQueue(deckId); if (!q.length) return toast(counts(deckId).nw && !newLeft() ? `Você já viu as ${newPerDay()} cartas novas de hoje. Dá para mudar em Preferências.` : "Nada para estudar agora."); go("study", {deck:deckId, queue:q, i:0, seen:0, right:0, firstSeen:{}, total:q.length, t0:Date.now(), times:[]}); }
 const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, r = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(r).padStart(2, "0"); };
 // cronômetro da carta: corre até a pessoa responder
 function answered(){ const st = view; if (st.cardT0 && st.ansMs == null) { st.ansMs = Date.now() - st.cardT0; st.times.push(st.ansMs); } }
@@ -838,11 +891,175 @@ function pick(v){
 }
 function grade(g){
   const st = view; const id = st.queue[st.i]; const c = S.cards[id];
-  if (!st.firstSeen[id]) { st.firstSeen[id] = true; st.seen++; if (g >= 2) st.right++; logReview(g >= 2); }
+  if (!st.firstSeen[id]) { st.firstSeen[id] = true; st.seen++; if (g >= 2) st.right++; logReview(g >= 2, isNew(c), c.deck, st.ansMs); }
   store.putCard(schedule(c, g), true);
   if (g === 1) st.queue.push(id);
   st.i++; st.answer = null; st.revealed = false; st.typed = ""; st.cardT0 = null; st.ansMs = null; renderStudy();
 }
+
+/* ---------- tema, preferências e desempenho ---------- */
+function applyTheme(t){
+  const r = document.documentElement;
+  if (t === "light" || t === "dark") r.dataset.theme = t; else delete r.dataset.theme;
+  try { localStorage.setItem("fich-theme", t || "auto"); } catch(e){}
+}
+function renderPrefs(){
+  const th = S.profile.theme || "auto";
+  $app.innerHTML = header() + `
+    <button class="btn ghost back" data-act="home">← Baralhos</button>
+    <h2 style="margin-bottom:14px">Preferências</h2>
+    <div class="panel stack" style="padding:16px;gap:20px">
+      <div class="field"><span class="label">Aparência</span>
+        <div class="seg" role="group" aria-label="Tema" style="grid-template-columns:repeat(3,1fr)">${[["auto","Automático"],["light","Claro"],["dark","Escuro"]].map(([k,l]) => `<button type="button" data-act="theme" data-t="${k}" aria-pressed="${th === k}">${l}</button>`).join("")}</div>
+        <span class="hint">Automático segue o celular ou o computador.</span></div>
+      <form class="field" id="fnewday"><label class="label" for="newday">Cartas novas por dia</label>
+        <div class="row"><input class="txt" id="newday" type="number" min="0" max="500" inputmode="numeric" value="${newPerDay()}" style="width:110px"><button class="btn">Salvar</button></div>
+        <span class="hint">Quantas cartas que você nunca estudou entram por dia, somando todos os baralhos. As revisões não têm limite. Hoje ainda ${newLeft() === 1 ? "cabe 1 nova" : `cabem ${newLeft()} novas`}.</span></form>
+      <div class="field"><span class="label">Ajuda</span><div><button type="button" class="btn" data-act="welcomeagain">Ver as boas-vindas de novo</button></div></div>
+    </div>`;
+  document.getElementById("fnewday").onsubmit = e => { e.preventDefault(); const n = Math.max(0, Math.min(500, Math.round(+document.getElementById("newday").value || 0))); S.profile.newPerDay = n; store.putProfile(); toast(`Agora são ${n} cartas novas por dia`); renderPrefs(); };
+}
+function welcomePanel(){
+  if (S.profile.welcomed) return "";
+  return `<section class="panel welcome"><h2>Boas-vindas ao Fichário</h2>
+    <ol><li><b>Monte seus baralhos.</b> Crie um por matéria ou importe as questões de uma prova em PDF.</li>
+    <li><b>Estude um pouco todo dia.</b> O app mostra só o que está na hora de revisar: errou, a carta volta logo; acertou, volta mais tarde.</li>
+    <li><b>Treine com simulado.</b> Dentro de um baralho, faça uma prova com tempo e veja sua nota por matéria.</li></ol>
+    <button class="btn primary" data-act="welcomed">Entendi, vamos lá</button></section>`;
+}
+const pctOf = (r, n) => n ? Math.round(r / n * 100) : 0;
+function statRow(name, depth, e){
+  const p = pctOf(e[1], e[0]);
+  const cls = e[0] >= 5 ? (p >= 70 ? "ok" : p >= 50 ? "mid" : "low") : "";
+  return `<div class="srow" style="padding-left:${12 + depth * 14}px"><span class="sname">${depth ? "↳ " : ""}${esc(name)}</span>
+    <span class="sbar ${cls}" title="${p}% de acerto"><i style="width:${p}%"></i></span><span class="num sp">${e[0] ? p + "%" : "–"}</span>
+    <span class="num small muted sn">${e[0]}</span><span class="num small muted st">${e[3] ? clock(e[2] / e[3]) : "–"}</span></div>`;
+}
+function renderStats(){
+  const ds = S.profile.dstats || {}, log = S.profile.log || {};
+  const sum = ids => { const t = [0,0,0,0]; ids.forEach(id => (ds[id] || []).forEach((v, i) => t[i] += v || 0)); return t; };
+  let w = [0,0,0,0,0]; for (let i = 0; i < 7; i++) { const e = log[today(Date.now() - i*DAY)]; if (e) e.forEach((v, k) => w[k] += v || 0); }
+  const rows = deckTree().map(({d, depth}) => ({d, depth, e:sum([...descendants(d.id)])})).filter(x => x.e[0]);
+  const leaves = Object.keys(ds).filter(id => S.decks[id] && ds[id][0] >= 5).map(id => ({id, p:pctOf(ds[id][1], ds[id][0])})).sort((a,b) => a.p - b.p).slice(0, 3).filter(x => x.p < 70);
+  const sims = (S.profile.sims || []).slice().reverse().slice(0, 10);
+  const stat = (v, l) => `<div class="stat"><b class="num">${v}</b><span>${l}</span></div>`;
+  $app.innerHTML = header() + `
+    <button class="btn ghost back" data-act="home">← Baralhos</button>
+    <h2 style="margin-bottom:14px">Desempenho</h2>
+    <span class="label">Últimos 7 dias</span>
+    <div class="stats wide">${stat(w[0], w[0] === 1 ? "resposta" : "respostas")}${stat(w[0] ? pctOf(w[1], w[0]) + "%" : "–", "de acerto")}${stat(w[4] ? clock(w[3] / w[4]) : "–", "por resposta")}${stat(streak(), streak() === 1 ? "dia seguido" : "dias seguidos")}</div>
+    ${leaves.length ? `<div class="banner" style="margin-bottom:16px"><b>Vale reforçar:</b> ${leaves.map(x => `<button class="linkbtn" data-act="open" data-id="${x.id}">${esc(S.decks[x.id].name)}</button> (${x.p}%)`).join(", ")}.</div>` : ""}
+    <div class="list-h"><span class="label">Por matéria (baralho)</span></div>
+    ${rows.length ? `<div class="panel stable"><div class="srow head"><span class="sname">Matéria</span><span></span><span class="sp">Acerto</span><span class="sn" title="Respostas">Nº</span><span class="st">Tempo</span></div>${rows.map(x => statRow(x.d.name, x.depth, x.e)).join("")}</div>
+      <p class="hint" style="margin-top:6px">Conta a primeira resposta de cada carta no estudo e todas as respostas dos simulados. Tempo é a média por resposta.</p>`
+      : `<div class="panel empty"><p class="muted">Ainda não há respostas. Estude ou faça um simulado e os números aparecem aqui.</p></div>`}
+    <div class="list-h" style="margin-top:18px"><span class="label">Simulados</span></div>
+    ${sims.length ? `<div class="panel cards">${sims.map(r => `<div class="citem" style="cursor:default"><span class="txt"><b>${esc(r.name || "Simulado")}</b><br><span class="small muted num">${new Date(r.t).toLocaleDateString("pt-BR")} · ${r.right}/${r.n} certas · ${clock(r.ms)}</span></span><span class="chip ${r.score >= 70 ? "new" : r.score >= 50 ? "" : "bad"}">${r.score}%</span></div>`).join("")}</div>`
+      : `<div class="panel empty"><p class="muted">Nenhum simulado ainda. Abra um baralho e toque em Simulado.</p></div>`}`;
+}
+
+/* ---------- simulado ---------- */
+const simCards = deckId => deckCards(deckId).filter(c => (c.type === "mc" && (c.options || []).length >= 2) || (c.type === "ce" && (c.answer === "C" || c.answer === "E")));
+function renderSimSetup(){
+  const d = S.decks[view.deck]; const pool = simCards(view.deck);
+  const hasCe = pool.some(c => c.type === "ce");
+  const n0 = Math.min(pool.length, 20);
+  $app.innerHTML = header() + `
+    <button class="btn ghost back" data-act="open" data-id="${view.deck}">← ${esc(d ? d.name : "Baralho")}</button>
+    <h2 style="margin-bottom:6px">Simulado</h2>
+    <p class="muted" style="margin-top:0">Uma prova com tempo, sem ver o gabarito até entregar. No fim aparecem a nota, o tempo e o resultado por matéria.</p>
+    ${pool.length ? `<form class="panel stack" id="fsim" style="padding:16px;gap:16px">
+      <div class="field"><label class="label" for="sim-n">Quantas questões</label>
+        <div class="row"><input class="txt" id="sim-n" type="number" min="1" max="${pool.length}" value="${n0}" inputmode="numeric" style="width:110px"><span class="small muted">de ${pool.length} disponíveis${pool.length < deckCards(view.deck).length ? " (só entram certo/errado e múltipla escolha)" : ""}</span></div></div>
+      <div class="field"><label class="label" for="sim-min">Tempo de prova (minutos)</label>
+        <div class="row"><input class="txt" id="sim-min" type="number" min="1" max="600" value="${Math.max(1, Math.round(n0 * (hasCe && !pool.some(c => c.type === "mc") ? 1.5 : 3)))}" inputmode="numeric" style="width:110px"><label class="check small" style="margin:0"><input type="checkbox" id="sim-free"><span>Sem limite de tempo</span></label></div>
+        <span class="hint">Sugestão: 3 minutos por questão de múltipla escolha e 1,5 por certo ou errado.</span></div>
+      ${hasCe ? `<label class="check small"><input type="checkbox" id="sim-cebr"><span>Uma errada anula uma certa (estilo Cebraspe). Deixar em branco não desconta.</span></label>` : ""}
+      <button class="btn primary" style="min-height:48px">Começar simulado</button></form>`
+    : `<div class="panel empty"><p class="muted">Este baralho não tem questões de certo ou errado nem de múltipla escolha. Importe uma prova em PDF ou crie cartas desses tipos.</p></div>`}`;
+  const f = document.getElementById("fsim"); if (!f) return;
+  const nIn = document.getElementById("sim-n"), mIn = document.getElementById("sim-min"); let touched = false;
+  mIn.oninput = () => touched = true;
+  nIn.oninput = () => { if (touched) return; const n = Math.max(1, Math.min(pool.length, +nIn.value || 1)); mIn.value = Math.max(1, Math.round(n * (pool.some(c => c.type === "mc") ? 3 : 1.5))); };
+  document.getElementById("sim-free").onchange = e => mIn.disabled = e.target.checked;
+  f.onsubmit = e => {
+    e.preventDefault();
+    const n = Math.max(1, Math.min(pool.length, Math.round(+nIn.value || 1)));
+    const ids = pool.map(c => c.id); for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i+1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
+    const free = document.getElementById("sim-free").checked;
+    const cb = document.getElementById("sim-cebr");
+    go("sim", {deck:view.deck, qs:ids.slice(0, n), i:0, ans:{}, spent:{}, t0:Date.now(), enter:Date.now(), limit:free ? 0 : Math.max(1, +mIn.value || 1) * MIN, cebr:!!(cb && cb.checked)});
+  };
+}
+function simMove(to){
+  const st = view; const id = st.qs[st.i]; const now = Date.now();
+  st.spent[id] = (st.spent[id] || 0) + (now - st.enter); st.enter = now;
+  st.i = Math.max(0, Math.min(st.qs.length - 1, to)); st.confirm = false; renderSim(); window.scrollTo(0,0);
+}
+function simLeft(){ return view.limit ? view.limit - (Date.now() - view.t0) : 0; }
+function renderSim(){
+  const st = view; const c = S.cards[st.qs[st.i]];
+  if (!c) { st.qs.splice(st.i, 1); if (!st.qs.length) return go("home"); st.i = Math.min(st.i, st.qs.length - 1); return renderSim(); }
+  const a = st.ans[c.id]; const nAns = st.qs.filter(x => st.ans[x] !== undefined).length; const last = st.i === st.qs.length - 1;
+  const opts = c.type === "mc"
+    ? `<div class="choices">${c.options.map((o, k) => `<button class="choice ${a === k ? "picked" : ""}" data-act="simpick" data-v="${k}" aria-pressed="${a === k}"><span class="l">${LETTERS[k]}</span><span>${esc(o)}</span></button>`).join("")}</div>`
+    : `<div class="ce-row">${["C","E"].map(k => `<button class="choice ${a === k ? "picked" : ""}" data-act="simpick" data-v="${k}" aria-pressed="${a === k}">${k === "C" ? "Certo" : "Errado"}</button>`).join("")}</div>`;
+  $app.innerHTML = `<div class="study-top"><button class="btn ghost" data-act="simend">Entregar</button><div class="bar" aria-hidden="true"><i style="width:${Math.round(nAns / st.qs.length * 100)}%"></i></div><span class="small num ${st.limit ? "" : "muted"}" id="simclock" title="${st.limit ? "Tempo que falta" : "Tempo de prova"}">⏱ ${clock(st.limit ? simLeft() : Date.now() - st.t0)}</span></div>
+    <article class="ficha"><div class="meta"><span class="deck">Questão ${st.i + 1} de ${st.qs.length}</span><span class="type"><span class="tlong">${TYPES[c.type]}</span><span class="tshort">${TSHORT[c.type]}</span></span></div><div class="content">${c.front}</div>${opts}</article>
+    <div class="row" style="margin-top:14px;gap:8px;flex-wrap:nowrap"><button class="btn" data-act="simprev" ${st.i ? "" : "disabled"} style="min-height:48px">← Anterior</button>
+      ${last ? `<button class="btn primary" data-act="simend" style="flex:1;min-height:48px">Entregar prova</button>` : `<button class="btn primary" data-act="simnext" style="flex:1;min-height:48px">Próxima →</button>`}</div>
+    <div id="simconfirm"></div>
+    <details class="simmap"><summary class="small">Ver todas as questões (${nAns} de ${st.qs.length} respondidas)</summary><div class="grid">${st.qs.map((x, k) => `<button class="${st.ans[x] !== undefined ? "done" : ""} ${k === st.i ? "cur" : ""}" data-act="simgo" data-v="${k}">${k + 1}</button>`).join("")}</div></details>
+    <p class="keys">${c.type === "mc" ? "<kbd>A</kbd>–<kbd>E</kbd> marcar" : "<kbd>C</kbd> certo · <kbd>E</kbd> errado"} · <kbd>←</kbd> <kbd>→</kbd> navegar</p>`;
+  if (st.confirm) simAskEnd();
+}
+function simAskEnd(){
+  const st = view; const blank = st.qs.filter(x => st.ans[x] === undefined).length; st.confirm = true;
+  document.getElementById("simconfirm").innerHTML = `<div class="confirm neutral" style="margin-top:12px">${blank ? `Você deixou ${blank} ${blank === 1 ? "questão" : "questões"} em branco. ` : ""}Entregar a prova agora? <button class="btn primary" data-act="simfinish">Entregar</button><button class="btn ghost" data-act="simcontinue">Continuar fazendo</button></div>`;
+}
+function simFinish(timeout){
+  const st = view; const id = st.qs[st.i]; const now = Date.now();
+  st.spent[id] = (st.spent[id] || 0) + (now - st.enter);
+  const ms = st.limit ? Math.min(now - st.t0, st.limit) : now - st.t0;
+  const items = st.qs.map(x => { const c = S.cards[x]; if (!c) return null; const a = st.ans[x]; const right = a === undefined ? null : (c.type === "mc" ? a === c.correct : a === c.answer); return {id:x, deck:c.deck, a, right, ms:st.spent[x] || 0}; }).filter(Boolean);
+  const right = items.filter(x => x.right === true).length, wrong = items.filter(x => x.right === false).length, blank = items.length - right - wrong;
+  const net = st.cebr ? right - wrong : right;
+  const score = items.length ? Math.max(0, Math.round(net / items.length * 100)) : 0;
+  const ds = {...(S.profile.dstats || {})}; items.forEach(x => { if (x.right !== null) addDeckStat(ds, x.deck, x.right, x.ms); }); S.profile.dstats = ds;
+  const sims = [...(S.profile.sims || []), {t:now, deck:st.deck, name:S.decks[st.deck]?.name || "", n:items.length, right, wrong, blank, ms, score, cebr:st.cebr}].slice(-30);
+  S.profile.sims = sims; store.putProfile();
+  go("simres", {deck:st.deck, items, right, wrong, blank, net, score, ms, cebr:st.cebr, timeout, only:"wrong"});
+}
+function renderSimRes(){
+  const r = view; const n = r.items.length;
+  const answered = r.items.filter(x => x.right !== null);
+  const avg = answered.length ? answered.reduce((s, x) => s + x.ms, 0) / answered.length : 0;
+  const by = {}; r.items.forEach(x => { const e = by[x.deck] || (by[x.deck] = [0,0,0]); e[0]++; if (x.right) e[1]++; e[2] += x.ms; });
+  const stat = (v, l) => `<div class="stat"><b class="num">${v}</b><span>${l}</span></div>`;
+  const list = r.items.map((x, k) => ({...x, k})).filter(x => r.only === "all" || x.right !== true);
+  const ansTxt = (c, a) => a === undefined ? "em branco" : c.type === "mc" ? LETTERS[a] : (a === "C" ? "Certo" : "Errado");
+  $app.innerHTML = header() + `
+    <div class="panel" style="padding:22px 18px;text-align:center"><h2 style="margin:0">${r.timeout ? "Tempo esgotado" : "Prova entregue"}</h2>
+      <div class="score num ${r.score >= 70 ? "ok" : r.score >= 50 ? "mid" : "low"}">${r.score}%</div>
+      <p class="muted" style="margin:0">${r.cebr ? `Nota líquida: ${r.net} (${r.right} certas − ${r.wrong} erradas)` : `${r.right} de ${n} certas`}</p>
+      <div class="stats wide">${stat(r.right, "certas")}${stat(r.wrong, "erradas")}${stat(r.blank, "em branco")}${stat(clock(r.ms), "tempo total")}${stat(answered.length ? clock(avg) : "–", "por questão")}</div></div>
+    ${Object.keys(by).length > 1 ? `<div class="list-h" style="margin-top:16px"><span class="label">Por matéria</span></div><div class="panel stable"><div class="srow head"><span class="sname">Matéria</span><span></span><span class="sp">Acerto</span><span class="sn" title="Questões">Nº</span><span class="st">Tempo</span></div>${Object.entries(by).sort((a,b) => pctOf(a[1][1], a[1][0]) - pctOf(b[1][1], b[1][0])).map(([dk, e]) => statRow(S.decks[dk]?.name || "Sem baralho", 0, [e[0], e[1], e[2], e[0]])).join("")}</div>` : ""}
+    <div class="list-h" style="margin-top:16px"><span class="label">Correção</span><div class="seg" role="group" style="grid-template-columns:repeat(2,1fr);width:auto"><button data-act="simonly" data-v="wrong" aria-pressed="${r.only !== "all"}">Erros e brancos</button><button data-act="simonly" data-v="all" aria-pressed="${r.only === "all"}">Todas</button></div></div>
+    <div class="stack" style="gap:10px">${list.length ? list.map(x => { const c = S.cards[x.id]; if (!c) return ""; const gab = c.type === "mc" ? LETTERS[c.correct] : (c.answer === "C" ? "Certo" : "Errado");
+      return `<article class="panel" style="padding:12px 14px"><div class="row spread small"><b>Questão ${x.k + 1}</b><span class="chip ${x.right ? "new" : x.right === false ? "bad" : ""}">${x.right ? "Certa" : x.right === false ? "Errada" : "Em branco"}</span></div>
+        <div class="content" style="margin:8px 0">${c.front}</div>
+        ${c.type === "mc" ? `<ol class="alts">${c.options.map((o, k) => `<li class="${k === c.correct ? "right" : k === x.a ? "wrong" : ""}"><b>${LETTERS[k]}</b> ${esc(o)}</li>`).join("")}</ol>` : ""}
+        <p class="small" style="margin:6px 0 0">Sua resposta: <b>${ansTxt(c, x.a)}</b> · Gabarito: <b>${gab}</b> · <span class="muted num">${clock(x.ms)}</span></p>
+        ${!isBlank(c.comment) ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;font-weight:700">Comentário</summary><div class="comment content" style="margin-top:6px">${c.comment}</div></details>` : ""}</article>`; }).join("")
+      : `<div class="panel empty"><p class="muted">Nenhum erro. Mandou bem!</p></div>`}</div>
+    <div class="row sticky-bar"><button class="btn" data-act="open" data-id="${r.deck}">Voltar ao baralho</button><button class="btn primary" data-act="simsetup" data-id="${r.deck}" style="flex:1">Novo simulado</button></div>`;
+}
+setInterval(() => {
+  if (view.name !== "sim") return;
+  const el = document.getElementById("simclock"); if (!el) return;
+  if (view.limit) { const left = simLeft(); el.textContent = "⏱ " + clock(left); el.classList.toggle("late", left < 5 * MIN); if (left <= 0) simFinish(true); }
+  else el.textContent = "⏱ " + clock(Date.now() - view.t0);
+}, 500);
 
 /* importar / exportar */
 function parseCSV(text){
@@ -998,7 +1215,7 @@ async function resolveDeck(prefix, fallbackName){
 /* importar PDF */
 // [1,2,3,7,9,10] → "1–3, 7, 9–10"
 function ranges(ns){ const a = [...ns].sort((x, y) => x - y), out = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return out.join(", "); }
-const APP_VERSION = "22"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "23"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -1090,14 +1307,15 @@ function renderPdf(){
       <p id="pdf-keymsg" class="small muted" aria-live="polite"></p>
     </section>
     <div class="stack" style="gap:10px">${it.map((q, i) => {
-      const has = q.type === "mc" ? q.correct != null : !!q.answer;
+      const has = !q.lost && (q.type === "mc" ? q.correct != null : !!q.answer);
       const gab = q.type === "mc"
         ? `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option>${q.options.map((_, k) => `<option value="${k}" ${q.correct === k ? "selected" : ""}>${"ABCDE"[k]}</option>`).join("")}</select>`
         : `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option><option value="C" ${q.answer === "C" ? "selected" : ""}>Certo</option><option value="E" ${q.answer === "E" ? "selected" : ""}>Errado</option></select>`;
       return `<article class="panel stack" style="padding:12px 14px;gap:8px">
         <div class="row spread"><label class="row" style="gap:8px;font-weight:700"><input type="checkbox" class="pdf-inc" id="pdf-inc${i}" data-i="${i}" ${has ? "checked" : ""}> Questão ${q.num} <span class="tchip">${TSHORT[q.type]}</span></label>${gab}</div>
         <div class="row small" style="gap:8px"><label for="pdf-s${i}" class="muted">Matéria</label><input class="txt pdf-s" id="pdf-s${i}" list="pdf-subjects" value="${esc(q.subject || "")}" placeholder="Sem matéria (fica no baralho principal)" style="flex:1;min-width:0;padding:6px 10px"></div>
-        <textarea class="txt typed-in" id="pdf-f${i}" rows="3" style="margin:0">${esc(q.front)}</textarea>
+        ${q.lost ? `<p class="banner" style="margin:0">Não achei as alternativas desta questão no PDF. Digite abaixo ou deixe desmarcada.</p>` : ""}
+        <textarea class="txt typed-in" id="pdf-f${i}" rows="${Math.min(10, Math.max(3, (q.front.match(/\n/g) || []).length + 2))}" style="margin:0">${esc(q.front)}</textarea>
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
         <details ${q.comment ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">${q.comment ? "Comentário" : "Adicionar comentário"}</summary><textarea class="txt" id="pdf-c${i}" rows="3" style="margin-top:6px" placeholder="Por que essa é a resposta">${esc(q.comment || "")}</textarea></details>
       </article>`; }).join("")}</div>
@@ -1137,7 +1355,7 @@ function renderPdf(){
 function pdfCount(){ const n = document.querySelectorAll(".pdf-inc:checked").length; const b = document.getElementById("pdf-go"); if (b) { b.textContent = n ? `Importar ${n} ${n === 1 ? "questão" : "questões"}` : "Importar"; b.disabled = !n; } }
 async function pdfImport(){
   const it = view.items, deck = view.deck, err = document.getElementById("pdf-err");
-  const cards = [], missing = [];
+  const cards = [], missing = [], noopts = [];
   it.forEach((q, i) => {
     if (!document.getElementById("pdf-inc" + i).checked) return;
     const g = document.getElementById("pdf-g" + i).value;
@@ -1145,10 +1363,11 @@ async function pdfImport(){
     if (g === "") { missing.push(q.num); return; }
     const cm = (document.getElementById("pdf-c" + i)?.value ?? q.comment ?? "").trim();
     const c = {deck, type:q.type, front, comment:cm ? esc(cm).replace(/\n/g, "<br>") : "", tags:[], subject:(document.getElementById("pdf-s" + i)?.value || "").trim()};
-    if (q.type === "mc") { c.options = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim()).filter(Boolean); c.correct = Math.min(+g, c.options.length - 1); }
+    if (q.type === "mc") { c.options = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim()).filter(Boolean); if (c.options.length < 2) { noopts.push(q.num); return; } c.correct = Math.min(+g, c.options.length - 1); }
     else c.answer = g;
     cards.push(c);
   });
+  if (noopts.length) { err.textContent = `Faltam as alternativas da${noopts.length > 1 ? "s questões" : " questão"} ${noopts.join(", ")}. Digite ou desmarque.`; err.hidden = false; return; }
   if (missing.length) { err.textContent = `Falta o gabarito da${missing.length > 1 ? "s questões" : " questão"} ${missing.join(", ")}. Escolha a resposta ou desmarque.`; err.hidden = false; return; }
   const btn = document.getElementById("pdf-go"); btn.disabled = true; btn.textContent = "Importando…";
   const t = Date.now();
@@ -1184,6 +1403,20 @@ $app.addEventListener("click", e => {
   switch (a) {
     case "home": go("home"); break;
     case "io": go("io"); break;
+    case "prefs": go("prefs"); break;
+    case "stats": go("stats"); break;
+    case "theme": S.profile.theme = b.dataset.t; applyTheme(b.dataset.t); store.putProfile(); renderPrefs(); break;
+    case "welcomed": S.profile.welcomed = true; store.putProfile(); renderHome(); break;
+    case "welcomeagain": S.profile.welcomed = false; store.putProfile(); go("home"); break;
+    case "simsetup": go("simsetup", {deck:id}); break;
+    case "simpick": { const c = S.cards[view.qs[view.i]]; const v = c.type === "mc" ? +b.dataset.v : b.dataset.v; if (view.ans[c.id] === v) delete view.ans[c.id]; else view.ans[c.id] = v; renderSim(); break; }
+    case "simprev": simMove(view.i - 1); break;
+    case "simnext": simMove(view.i + 1); break;
+    case "simgo": simMove(+b.dataset.v); break;
+    case "simend": simAskEnd(); break;
+    case "simcontinue": view.confirm = false; document.getElementById("simconfirm").innerHTML = ""; break;
+    case "simfinish": simFinish(false); break;
+    case "simonly": view.only = b.dataset.v; renderSimRes(); break;
     case "pdf": go("pdf", {deck:id || ""}); break;
     case "pdfagain": go("pdf", {deck:view.deck}); break;
     case "pdfimport": pdfImport(); break;
@@ -1246,6 +1479,14 @@ $app.addEventListener("click", e => {
   }
 });
 document.addEventListener("keydown", e => {
+  if (view.name === "sim" && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target.closest && e.target.closest("input,textarea,[contenteditable]"))) {
+    const c = S.cards[view.qs[view.i]]; if (!c) return; const k = e.key.toLowerCase();
+    if (k === "arrowright" && view.i < view.qs.length - 1) { e.preventDefault(); simMove(view.i + 1); return; }
+    if (k === "arrowleft" && view.i > 0) { e.preventDefault(); simMove(view.i - 1); return; }
+    const v = c.type === "ce" ? (k === "c" ? "C" : k === "e" ? "E" : null) : (LETTERS.toLowerCase().indexOf(k) >= 0 && LETTERS.toLowerCase().indexOf(k) < c.options.length ? LETTERS.toLowerCase().indexOf(k) : null);
+    if (v !== null && k.length === 1) { view.ans[c.id] = v; renderSim(); }
+    return;
+  }
   if (view.name !== "study" || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.closest && e.target.closest("input,textarea,[contenteditable]")) return;
   const st = view; if (st.i >= st.queue.length) return;
@@ -1329,6 +1570,7 @@ if (!store.configured()) {
     me = {uid:user.uid, email:user.email, name:user.displayName || pendingName || (user.email || "").split("@")[0]};
     $app.innerHTML = header() + `<div class="panel empty"><p class="muted">Abrindo seu fichário…</p></div>`;
     await store.init();
+    if (S.profile.theme) applyTheme(S.profile.theme);
     if (S.profile._missing && !S.profile.seeded && !Object.keys(S.decks).length) { try { await seedExamples(); } catch(err){ console.error(err); } }
     else if (!S.profile.name && !S.profile._missing) store.putProfile();
     go("home");

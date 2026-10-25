@@ -67,7 +67,12 @@ export async function extractPdfText(file, onProgress){
 
 /* ---------- interpretação do texto ---------- */
 const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,3})\s*(?:[.)\-–—:]|\s)\s*(.*)$/i;
-const ALT = /^\(?([A-Ea-e])\s*[).\-–—]\s+(.*)$/;
+// "(C)2,6" sem espaço também vale quando a letra está entre parênteses
+const ALT = /^(?:\(([A-Ea-e])\)|\(?([A-Ea-e])\s*[).\-–—]\s)\s*(.*)$/;
+// itens de lista dentro do enunciado: "( ) afirmativa" (V/F), "I.", "II -", "1)"
+const LIST_ITEM = /^(?:\(\s*[VvFf_]?\s*\)|\[\s*\]|[IVX]{1,5}\s*[.\-–—)]\s|\d{1,2}\s*\)\s)/;
+// linha de tabela: separadores "|" ou dois ou mais valores (R$ 300.000,00 · 31/12/24 · 12,5%)
+const TABLE_ROW = l => /\S\s*\|\s*\S/.test(l) || (l.match(/R\$/g) || []).length >= 2 || ((l.match(/\d[\d.,/%]*/g) || []).length >= 2 && (l.match(/\d/g) || []).length / l.length > 0.25);
 // gabarito logo depois da questão: "Gabarito: B", "GABARITO: LETRA C", "Gab. C", "Resposta correta: (B)", "Alternativa correta: letra B"
 const GAB_LINE = /^(?:g[a4]b[a4]r[i1l|!][t7][o0]|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:;,\-–]?\s*\(?(certo|errado|[a-e8])\)?(?![a-zà-ú\d])/i;
 const BANCA = /^\S{0,6}\s*\((?:FGV|CESPE|CEBRASPE|FCC|VUNESP|IBFC|IDECAN|AOCP|QUADRIX|CESGRANRIO|FUNDATEC|CONSULPLAN|IADES|FEPESE|FUNRIO|IBADE|AVANÇA ?SP|INSTITUTO|SELECON|OBJETIVA|FUMARC|COPS|NC-UFPR|COMPERVE|CETRO|ESAF|FUNCAB|IDIB|ITAME|INSTITUTO AOCP)[\s\/)\-–]/i;
@@ -252,12 +257,23 @@ export function parseQuestions(text){
       // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
       // (no meio do comentário, só pula a linha: costuma ser o cabeçalho da página seguinte)
       const st = sectionTitle(l); if (st) pend = {t:st, i};
-      if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { if (mode !== "comment" && mode !== "after") mode = "skip"; continue; }
+      // sobra de tabela lida por imagem: só barras e letras soltas
+      if (mode === "front" && l.replace(/[^A-Za-zÀ-ú0-9]/g, "").length < 2) continue;
+      const upper = l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l);
+      // no meio do enunciado, cabeçalho de página é só pulado; "Com base nesses dados, ..." continua o enunciado
+      if (mode === "front" && q.front && (upper || (INSTR.test(l) && !/julg|\bitens?\b|quest(?:[õo]es|[ãa]o)/i.test(l)))) { if (upper) continue; }
+      else if (INSTR.test(l) || upper) { if (mode !== "comment" && mode !== "after") mode = "skip"; continue; }
       const c = l.match(COMMENT);
       if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
       const a = l.match(ALT);
-      if (a && mode !== "comment" && a[1].toUpperCase() === "ABCDE"[q.options.length]) { q.options.push(a[2].trim()); mode = "opt"; continue; }
-      if (mode === "front") q.front += (q.front ? " " : "") + l;
+      if (a && mode !== "comment" && (a[1] || a[2]).toUpperCase() === "ABCDE"[q.options.length]) { q.options.push(a[3].trim()); mode = "opt"; continue; }
+      if (mode === "front") {
+        // depois da lista, a frase que fecha o enunciado ("As afirmativas são, respectivamente,") vai para a linha de baixo
+        const afterList = q.lastItem && /[.;]$/.test(q.front) && /^[A-ZÀ-Ú]/.test(l);
+        const br = q.front && (LIST_ITEM.test(l) || TABLE_ROW(l) || q.lastRow || afterList);
+        q.front += (q.front ? (br ? "\n" : " ") : "") + l; q.lastRow = TABLE_ROW(l);
+        if (LIST_ITEM.test(l)) q.lastItem = true; else if (afterList) q.lastItem = false;
+      }
       else if (mode === "opt") q.options[q.options.length - 1] += " " + l;
       else if (mode === "comment" || mode === "after") q.comment += (q.comment ? " " : "") + l; // explicação que vem depois do "Gabarito: D" também entra
     }
@@ -296,9 +312,12 @@ export function parseQuestions(text){
   const expected = Math.max(0, ...(strong.length >= 5 ? strong.map(i => +((lines[i].match(QSTART) || [])[1] || (lines[i].match(QSTART) || [])[3] || 0)) : []), ...(keyNums.length >= 5 ? keyNums : []));
   const result = qs.filter(q => q.front.length > 3).map(q => {
     const ans = q.answer || key[q.num] || null;
-    const isCE = q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1]));
+    // sem alternativas, mas com cara de múltipla escolha (a página das alternativas faltou ou não foi lida)
+    const lost = q.options.length < 2 && ((ans && /[ABD]/.test(ans)) || /assinale|alternativa|respectivamente|verdadeira \(V\)|correto o que se afirma|est[áa]\s+corret[ao]\s+(?:o|apenas)/i.test(q.front));
+    const isCE = !lost && (q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1])));
     const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment, subject:q.section || guessSubject([q.front, ...q.options, q.comment].join(" "))};
     if (isCE) out.answer = ans === "C" || ans === "E" ? ans : null;
+    else if (lost) { out.options = ["", "", "", ""]; out.lost = true; const idx = ans ? "ABCD".indexOf(ans) : -1; out.correct = idx >= 0 ? idx : null; }
     else { out.options = q.options.slice(0, 5); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
     return out;
   });
