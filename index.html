@@ -357,6 +357,15 @@ const store = (() => {
       return "s:" + code;
     },
     leaveShared(sid){ return seq("s"+sid, () => updateDoc(doc(db, "sharedDecks", sid), {members:arrayRemove(me.uid), ["names." + me.uid]:deleteField()})); },
+    // estimativa do espaço no Firestore: tamanho do texto de cada documento + o que o Firestore soma por documento e índices
+    usage(){
+      let bytes = 0, docs = 0;
+      const add = o => { bytes += new Blob([JSON.stringify(o)]).size; docs++; };
+      [personalCards, personalDecks, progress, shared].forEach(m => Object.values(m).forEach(add));
+      Object.values(sharedCards).forEach(cs => Object.values(cs).forEach(add));
+      add(S.profile || {});
+      return Math.round(bytes * 2 + docs * 100);
+    },
     putDeck(d){
       S.decks[d.id] = d;
       if (d.shared) return seq("s"+d.sid, () => updateDoc(doc(db, "sharedDecks", d.sid), {name:d.name}));
@@ -451,6 +460,16 @@ function render(){
 }
 function go(name, extra = {}){ view = {name, ...extra}; render(); window.scrollTo(0,0); }
 
+// espaço usado, discreto no rodapé da tela inicial (plano grátis do Firebase: 1 GB para o projeto todo)
+const FREE_BYTES = 1024 ** 3;
+function usageLine(){
+  const b = store.usage ? store.usage() : 0; if (!b) return "";
+  const pct = b / FREE_BYTES * 100;
+  const size = b < 1024 * 1024 ? Math.max(1, Math.round(b / 1024)) + " KB" : (b / 1024 / 1024).toLocaleString("pt-BR", {maximumFractionDigits:1}) + " MB";
+  const pctTxt = pct < 0.1 ? "menos de 0,1%" : pct.toLocaleString("pt-BR", {maximumFractionDigits:1}) + "%";
+  const warn = pct >= 80;
+  return `<p class="hint" style="margin-top:6px;${warn ? "color:var(--warn);font-weight:700" : ""}" title="Estimativa feita no aparelho. Conta suas cartas, seu progresso e os baralhos compartilhados que você vê. O limite de 1 GB do plano grátis vale para todos os usuários juntos.">Espaço usado: cerca de ${size} de 1 GB grátis (${pctTxt})${warn ? ". Está chegando no limite." : ""}</p>`;
+}
 function renderHome(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
   const all = counts(); const st = streak(); const ac = acc7();
@@ -474,7 +493,8 @@ function renderHome(){
           <div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}${c.due ? `<span class="chip due">${c.due} revisar</span>` : ""}${c.nw ? `<span class="chip new">${c.nw} novas</span>` : ""}<span class="chip">${c.total} cartas</span>${kids ? `<span class="chip">${kids} ${kids === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div>
         <button class="btn ${c.due || c.nw ? "primary" : ""}" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button>
       </div>`; }).join("") : `<div class="empty"><h3>Nenhum baralho ainda</h3><p class="muted">Crie um baralho por matéria, como Constitucional ou Português, e adicione suas cartas.</p></div>`}</div>
-    <p class="small muted" style="margin-top:14px">Dica: no celular, use "Adicionar à tela inicial" no menu do navegador para abrir o fichário como um app.</p>`;
+    <p class="small muted" style="margin-top:14px">Dica: no celular, use "Adicionar à tela inicial" no menu do navegador para abrir o fichário como um app.</p>
+    ${usageLine()}`;
   const f = document.getElementById("fnewdeck");
   f.onsubmit = async e => {
     e.preventDefault(); const name = document.getElementById("newdeck-name").value.trim(); if (!name) return;
@@ -894,7 +914,7 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
-const APP_VERSION = "13"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "14"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
