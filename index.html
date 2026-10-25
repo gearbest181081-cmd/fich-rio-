@@ -204,7 +204,7 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
-import { extractPdfText, parseQuestions, parseAnswerKey, pdfPageCount, ocrPdf, cancelOcr, SUBJECT_NAMES } from "./pdf-import.js";
+import { extractPdfText, parseQuestions, parseAnswerKey, pdfPageCount, ocrPdf, cancelOcr, SUBJECT_NAMES, lastOcr, lastText } from "./pdf-import.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager, doc, collection, setDoc, deleteDoc, updateDoc, getDoc, onSnapshot, query, where, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -897,6 +897,7 @@ async function showOcr(f){
     try {
       const text = await ocrPdf(f, from, to, (cur, tot, fr) => { const pct = Math.round(((cur - 1) + fr) / tot * 100); bar.firstElementChild.style.width = pct + "%"; om.textContent = `Lendo página ${from + cur - 1} (${cur} de ${tot})… ${pct}%`; });
       view.busy = false; try { lock && lock.release(); } catch(e){}
+      view.pdfSrc = f; view.pdfPages = {...lastOcr.pages}; view.badPages = [...lastOcr.empty];
       const items = parseQuestions(text);
       if (!items.length) { om.innerHTML = `<span class="err">Li as páginas, mas não reconheci questões numeradas nelas.</span> Tente outras páginas ou confira abaixo o que foi lido.`; box.insertAdjacentHTML("beforeend", `<details><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido</summary><textarea class="txt" readonly style="margin-top:8px">${esc(text)}</textarea></details>`); go.disabled = false; stop.hidden = true; return; }
       await finishPdf(items, f.name + ` (páginas ${from}–${to})`, om, text);
@@ -930,7 +931,9 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
-const APP_VERSION = "19"; // acompanhar o número do cache em sw.js
+// [1,2,3,7,9,10] → "1–3, 7, 9–10"
+function ranges(ns){ const a = [...ns].sort((x, y) => x - y), out = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return out.join(", "); }
+const APP_VERSION = "20"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -993,6 +996,8 @@ function renderPdf(){
         const text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo a prova: página ${p} de ${n}…`; });
         view.busy = false;
         if (text.replace(/\s/g, "").length < 40) { view.scanFile = f; showOcr(f); return; }
+        view.pdfSrc = f; view.pdfPages = {...lastText.pages};
+        view.badPages = Object.entries(lastText.pages).filter(([, t]) => t.replace(/\s/g, "").length < 40).map(([p]) => +p);
         const items = parseQuestions(text);
         if (!items.length) { readBtn.disabled = false; msg.innerHTML = `<span class="err">Li o PDF, mas não reconheci questões numeradas nele.</span> Confira se escolheu a prova (e não o gabarito) no passo 1.`; return; }
         await finishPdf(items, f.name, msg, text);
@@ -1010,6 +1015,9 @@ function renderPdf(){
   $app.innerHTML = top + `<datalist id="pdf-subjects">${subjList.map(n => `<option value="${esc(n)}">`).join("")}</datalist><section class="panel stack" style="padding:16px;margin-bottom:14px;gap:8px">
       <p><b>${it.length} questões encontradas</b> em ${esc(view.file)}: ${nMc} de múltipla escolha e ${nCe} de certo ou errado.</p>
       ${view.keyNote ? `<p class="small" style="color:${view.keyNote.ok ? "var(--good)" : "var(--warn)"}"><b>${view.keyNote.ok ? "✓ " : ""}${esc(view.keyNote.text)}</b></p>` : ""}
+      ${(() => { const nums = new Set(it.map(q => q.num)); const top = Math.max(it.expected || 0, ...it.map(q => q.num)); const miss = []; for (let k = Math.min(...it.map(q => q.num)); k <= top; k++) if (!nums.has(k)) miss.push(k);
+        return miss.length ? `<p class="small" style="color:var(--warn)"><b>Faltaram ${miss.length} ${miss.length === 1 ? "questão" : "questões"}:</b> ${esc(ranges(miss))}.${view.badPages?.length ? "" : " Elas podem estar numa página que não foi lida."}</p>` : ""; })()}
+      ${view.badPages?.length ? `<div class="stack" style="gap:6px"><p class="small" style="color:var(--warn)">${view.badPages.length === 1 ? "A página" : "As páginas"} ${esc(ranges(view.badPages))} ${view.badPages.length === 1 ? "ficou" : "ficaram"} sem texto lido.</p><div class="row"><button class="btn small" id="pdf-reread" type="button">Ler ${view.badPages.length === 1 ? "essa página" : "essas páginas"} de novo</button></div><p id="pdf-rereadmsg" class="small muted" aria-live="polite"></p></div>` : ""}
       ${noKey ? `<p class="small" style="color:var(--warn)">${noKey} ${noKey === 1 ? "está" : "estão"} sem gabarito e ficaram desmarcadas. Escolha a resposta para incluir.</p>` : ""}
       <p class="small muted">Confira o texto, corrija o que precisar e toque em Importar. Elas vão para o baralho <b>${esc(deckName)}</b>.</p>
       ${subjCount.length ? (isSharedDeck ? `<p class="small muted">Matérias encontradas: ${subjCount.map(([n, k]) => `${esc(n)} (${k})`).join(", ")}. A separação em sub-baralhos funciona em baralhos pessoais.</p>` : `<label class="row small" style="gap:8px;align-items:flex-start"><input type="checkbox" id="pdf-split" ${view.split === false ? "" : "checked"} style="margin-top:3px"><span><b>Separar em sub-baralhos por matéria</b> dentro de ${esc(deckName)}: ${subjCount.map(([n, k]) => `${esc(n)} (${k})`).join(", ")}. Dá para trocar a matéria de cada questão abaixo.</span></label>`) : ""}
@@ -1036,6 +1044,21 @@ function renderPdf(){
     <p id="pdf-err" class="err" hidden></p>`;
   $app.querySelectorAll(".pdf-g").forEach(sel => sel.onchange = () => { if (sel.value !== "") document.getElementById("pdf-inc" + sel.dataset.i).checked = true; pdfCount(); });
   $app.querySelectorAll(".pdf-inc").forEach(c => c.onchange = pdfCount);
+  const rr = document.getElementById("pdf-reread");
+  if (rr) rr.onclick = async () => {
+    const msg = document.getElementById("pdf-rereadmsg"); rr.disabled = true; view.busy = true;
+    let lock = null; try { lock = await navigator.wakeLock?.request("screen"); } catch(e){}
+    try {
+      const list = [...view.badPages];
+      await ocrPdf(view.pdfSrc, 0, 0, (cur, tot, fr) => { msg.textContent = `Lendo página ${list[cur - 1]} (${cur} de ${tot})… ${Math.round(((cur - 1) + fr) / tot * 100)}%`; }, list);
+      Object.assign(view.pdfPages, lastOcr.pages); view.badPages = [...lastOcr.empty];
+      const text = Object.keys(view.pdfPages).map(Number).sort((a, b) => a - b).map(p => view.pdfPages[p]).join("\n");
+      const items = parseQuestions(text);
+      if (items.length) await finishPdf(items, view.file, msg, text);
+      else { msg.textContent = "Não consegui ler questões nessas páginas."; rr.disabled = false; }
+    } catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler as páginas.</span>`; rr.disabled = false; }
+    finally { view.busy = false; try { lock && lock.release(); } catch(e){} }
+  };
   const kf = document.getElementById("pdf-keyfile");
   if (kf) kf.onchange = async e => {
     const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg");

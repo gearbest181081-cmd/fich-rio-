@@ -48,14 +48,18 @@ async function openDoc(file){
 }
 export async function pdfPageCount(file){ return (await openDoc(file)).numPages; }
 
+// texto de cada página na última extração (para achar páginas que são só imagem no meio de um PDF com texto)
+export const lastText = {pages:{}};
 export async function extractPdfText(file, onProgress){
   const doc = await openDoc(file);
-  const lines = [];
+  const lines = []; lastText.pages = {};
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const vp = page.getViewport({scale:1});
     const tc = await page.getTextContent();
-    lines.push(...pageLines(tc.items, vp.width));
+    const pl = pageLines(tc.items, vp.width);
+    lastText.pages[p] = pl.join("\n");
+    lines.push(...pl);
     onProgress && onProgress(p, doc.numPages);
   }
   return lines.join("\n");
@@ -272,7 +276,10 @@ export function parseQuestions(text){
     if (score(alt) > score(qs)) qs = alt;
   }
 
-  return qs.filter(q => q.front.length > 3).map(q => {
+  // quantas questões a prova parece ter: maior número de cabeçalho forte ou do gabarito
+  const keyNums = Object.keys(key).map(Number);
+  const expected = Math.max(0, ...(strong.length >= 5 ? strong.map(i => +((lines[i].match(QSTART) || [])[1] || (lines[i].match(QSTART) || [])[3] || 0)) : []), ...(keyNums.length >= 5 ? keyNums : []));
+  const result = qs.filter(q => q.front.length > 3).map(q => {
     const ans = q.answer || key[q.num] || null;
     const isCE = q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1]));
     const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment, subject:q.section || guessSubject([q.front, ...q.options, q.comment].join(" "))};
@@ -280,6 +287,8 @@ export function parseQuestions(text){
     else { out.options = q.options.slice(0, 5); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
     return out;
   });
+  result.expected = expected;
+  return result;
 }
 
 /* ---------- PDF escaneado: leitura por imagem (tesseract.js em vendor/tesseract) ---------- */
@@ -297,39 +306,54 @@ function loadTesseract(){
 let ocrWorker = null, ocrCancel = false;
 export function cancelOcr(){ ocrCancel = true; if (ocrWorker) { ocrWorker.terminate(); ocrWorker = null; } }
 // onProgress(página atual, total, fração da página)
-export async function ocrPdf(file, from, to, onProgress){
+// páginas lidas na última leitura por imagem: texto de cada uma e as que saíram vazias
+export const lastOcr = {pages:{}, empty:[]};
+export async function ocrPdf(file, from, to, onProgress, pageList){
   ocrCancel = false;
   const doc = await openDoc(file);
   const T = await loadTesseract();
   const base = new URL("vendor/tesseract/", document.baseURI).href;
+  const list = pageList || Array.from({length:to - from + 1}, (_, k) => from + k);
   let cur = 0;
   ocrWorker = await T.createWorker("por", 1, {
     workerPath: base + "worker.min.js", corePath: base + "core", langPath: base + "lang", gzip: true,
-    logger: m => { if (m.status === "recognizing text") onProgress && onProgress(cur, to - from + 1, m.progress); },
+    logger: m => { if (m.status === "recognizing text") onProgress && onProgress(cur, list.length, m.progress); },
   });
+  // um canvas só para todas as páginas: no iPhone cada canvas novo soma memória e, depois de umas 30 páginas,
+  // o Safari passa a desenhar em branco sem avisar
+  const cv = document.createElement("canvas"), cx = cv.getContext("2d", {willReadFrequently:true});
+  const read = async (page, maxW) => {
+    const vp1 = page.getViewport({scale:1});
+    const vp = page.getViewport({scale:Math.min(2.5, maxW / vp1.width)});
+    cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
+    await page.render({canvasContext:cx, viewport:vp}).promise;
+    const {data} = await ocrWorker.recognize(cv, {}, {text:true, blocks:true});
+    // usa a posição de cada palavra para separar colunas, como no PDF com texto
+    const words = [];
+    (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(pa => (pa.lines || []).forEach(l => (l.words || []).forEach(w => {
+      if (w.text && w.text.trim()) words.push({str:w.text, width:w.bbox.x1 - w.bbox.x0, transform:[1, 0, 0, w.bbox.y1 - w.bbox.y0, w.bbox.x0, cv.height - w.bbox.y1]});
+    }))));
+    return {text:words.length ? pageLines(words, cv.width).join("\n") : (data.text || ""), words:words.length};
+  };
   const out = [];
+  lastOcr.pages = {}; lastOcr.empty = [];
   try {
-    for (let p = from; p <= to; p++) {
+    for (const p of list) {
       if (ocrCancel) break;
-      cur = p - from + 1; onProgress && onProgress(cur, to - from + 1, 0);
+      cur++; onProgress && onProgress(cur, list.length, 0);
       const page = await doc.getPage(p);
-      const vp1 = page.getViewport({scale:1});
-      const scale = Math.min(2.5, 1800 / vp1.width);
-      const vp = page.getViewport({scale});
-      const cv = document.createElement("canvas"); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
-      const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
-      await page.render({canvasContext:cx, viewport:vp}).promise;
-      if (ocrCancel) break;
-      let data;
-      try { ({data} = await ocrWorker.recognize(cv, {}, {text:true, blocks:true})); } catch(e){ if (ocrCancel) break; throw e; }
-      // usa a posição de cada palavra para separar colunas, como no PDF com texto
-      const words = [];
-      (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(pa => (pa.lines || []).forEach(l => (l.words || []).forEach(w => {
-        if (w.text && w.text.trim()) words.push({str:w.text, width:w.bbox.x1 - w.bbox.x0, transform:[1, 0, 0, w.bbox.y1 - w.bbox.y0, w.bbox.x0, cv.height - w.bbox.y1]});
-      }))));
-      out.push(words.length ? pageLines(words, cv.width).join("\n") : data.text);
-      cv.width = cv.height = 0;
+      let r;
+      try {
+        r = await read(page, 1800);
+        // página que veio quase vazia: tenta de novo menor (pouca memória no celular costuma ser a causa)
+        if (r.words < 8 && !ocrCancel) { const r2 = await read(page, 1200); if (r2.words > r.words) r = r2; }
+      } catch(e){ if (ocrCancel) break; throw e; }
+      finally { try { page.cleanup(); } catch(e){} }
+      lastOcr.pages[p] = r.text;
+      if (r.words < 8) lastOcr.empty.push(p);
+      out.push(r.text);
     }
-  } finally { if (ocrWorker) { await ocrWorker.terminate(); ocrWorker = null; } }
+  } finally { cv.width = cv.height = 0; if (ocrWorker) { await ocrWorker.terminate(); ocrWorker = null; } }
   return out.join("\n");
 }
