@@ -515,12 +515,22 @@ function renderHome(){
   };
 }
 
+// apaga o baralho, os subbaralhos e todas as cartas; baralho compartilhado de outra pessoa só é deixado
+async function deleteDeckTree(did){
+  const ids = [...descendants(did)].filter(id => S.decks[id]);
+  const mine = ids.filter(id => !(S.decks[id].shared && S.decks[id].owner !== me.uid));
+  const cards = Object.values(S.cards).filter(c => mine.includes(c.deck));
+  for (const c of cards) await store.delCard(c.id);
+  for (const id of ids.reverse()) { if (mine.includes(id)) await store.delDeck(id); else if (store.leaveShared) await store.leaveShared(S.decks[id].sid); }
+  return {decks:ids.length, cards:cards.length};
+}
 function renderDeck(){
   const d = S.decks[view.id]; if (!d) return go("home");
   const c = counts(d.id); const q = (view.q || "").toLowerCase();
   const subs = childrenOf(d.id);
   const crumbs = []; { let p = parentOf(d), n = 0; while (p && n++ < 20) { crumbs.unshift(S.decks[p]); p = parentOf(S.decks[p]); } }
   const sel = view.sel || null; // modo de seleção para apagar várias cartas
+  const dsel = view.dsel || null; // modo de seleção para apagar subbaralhos
   const list = ownCards(d.id).sort((a,b) => (b.created||0) - (a.created||0)).filter(x => !q || plain(x.front + " " + (x.back||"") + " " + (x.comment||"") + " " + (x.options||[]).join(" ") + " " + (x.tags||[]).join(" ")).toLowerCase().includes(q));
   $app.innerHTML = header() + `
     <div class="row" style="margin-bottom:10px"><button class="btn ghost" data-act="${crumbs.length ? "open" : "home"}" data-id="${crumbs.length ? crumbs[crumbs.length-1].id : ""}">← ${crumbs.length ? esc(crumbs[crumbs.length-1].name) : "Baralhos"}</button></div>
@@ -528,7 +538,7 @@ function renderDeck(){
     <div class="sec-h"><div style="min-width:0"><h2 id="dname">${esc(d.name)}</h2><div class="chips">${d.shared ? `<span class="chip shared">compartilhado</span>` : ""}<span class="chip due">${c.due} revisar</span><span class="chip new">${c.nw} novas</span><span class="chip">${c.total} cartas</span></div></div>
       <div class="row"><button class="btn ghost" data-act="newsub">Novo subbaralho</button><button class="btn ghost" data-act="pdf" data-id="${d.id}">Importar PDF</button><button class="btn" data-act="newcard">Nova carta</button><button class="btn primary" data-act="study" data-id="${d.id}" ${c.due || c.nw ? "" : "disabled"}>Estudar</button></div></div>
     <div class="stack" style="margin-top:6px">
-      ${subs.length ? `<div><div class="label" style="margin-bottom:6px">Subbaralhos</div><div class="panel decks">${subs.map(x => { const cx = counts(x.id); const k = childrenOf(x.id).length; return `<div class="deck"><span class="sw" style="background:${esc(x.color)}"></span><div style="min-width:0"><button class="name" data-act="open" data-id="${x.id}">${esc(x.name)}</button><div class="chips">${x.shared ? `<span class="chip shared">compartilhado</span>` : ""}${cx.due ? `<span class="chip due">${cx.due} revisar</span>` : ""}${cx.nw ? `<span class="chip new">${cx.nw} novas</span>` : ""}<span class="chip">${cx.total} cartas</span>${k ? `<span class="chip">${k} ${k === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div><button class="btn ${cx.due || cx.nw ? "primary" : ""}" data-act="study" data-id="${x.id}" ${cx.due || cx.nw ? "" : "disabled"}>Estudar</button></div>`; }).join("")}</div>
+      ${subs.length ? `<div><div class="row spread" style="margin-bottom:6px;gap:8px"><span class="label">Subbaralhos</span>${dsel ? `<div class="row" style="gap:6px"><span class="small"><b>${dsel.size}</b> ${dsel.size === 1 ? "selecionado" : "selecionados"}</span><button class="btn ghost small" data-act="dselall">${subs.every(x => dsel.has(x.id)) ? "Desmarcar todos" : "Marcar todos"}</button><button class="btn ghost small" data-act="dselcancel">Cancelar</button><button class="btn danger small" data-act="dseldel" ${dsel.size ? "" : "disabled"}>Apagar</button></div>` : `<button class="btn ghost small" data-act="dselstart">Selecionar para apagar</button>`}</div><div id="dselconfirm"></div><div class="panel decks">${subs.map(x => { const cx = counts(x.id); const k = childrenOf(x.id).length; return `<div class="deck">${dsel ? `<input type="checkbox" class="dselc" data-id="${x.id}" ${dsel.has(x.id) ? "checked" : ""} aria-label="Selecionar ${esc(x.name)}" style="width:20px;height:20px;margin-right:6px">` : `<span class="sw" style="background:${esc(x.color)}"></span>`}<div style="min-width:0"><button class="name" data-act="${dsel ? "dseltoggle" : "open"}" data-id="${x.id}">${esc(x.name)}</button><div class="chips">${x.shared ? `<span class="chip shared">compartilhado</span>` : ""}${cx.due ? `<span class="chip due">${cx.due} revisar</span>` : ""}${cx.nw ? `<span class="chip new">${cx.nw} novas</span>` : ""}<span class="chip">${cx.total} cartas</span>${k ? `<span class="chip">${k} ${k === 1 ? "subbaralho" : "subbaralhos"}</span>` : ""}</div></div><button class="btn ${cx.due || cx.nw ? "primary" : ""}" data-act="study" data-id="${x.id}" ${cx.due || cx.nw ? "" : "disabled"}>Estudar</button></div>`; }).join("")}</div>
         <div class="label" style="margin:14px 0 0">Cartas deste baralho</div></div>` : ""}
       <input class="search" id="q" type="search" placeholder="Buscar nas cartas" value="${esc(view.q||"")}">
       ${list.length ? `<div class="row spread" style="gap:8px">${sel ? `<span class="small"><b>${sel.size}</b> ${sel.size === 1 ? "selecionada" : "selecionadas"}</span><div class="row" style="gap:6px"><button class="btn ghost small" data-act="selall">${list.every(x => sel.has(x.id)) ? "Desmarcar todas" : "Marcar todas"}</button><button class="btn ghost small" data-act="selcancel">Cancelar</button><button class="btn danger small" data-act="seldel" ${sel.size ? "" : "disabled"}>Apagar</button></div>` : `<span></span><button class="btn ghost small" data-act="selstart">Selecionar para apagar</button>`}</div><div id="selconfirm"></div>` : ""}
@@ -544,6 +554,7 @@ function renderDeck(){
           <div class="row" id="delzone">${d.shared && d.owner !== me.uid ? `<button class="btn danger" data-act="leavedeck">Sair deste baralho</button>` : `<button class="btn danger" data-act="askdel">Apagar baralho${subs.length ? "" : " e cartas"}</button>`}</div>
         </div></details>
     </div>`;
+  $app.querySelectorAll(".dselc").forEach(cb => cb.onchange = () => { cb.checked ? dsel.add(cb.dataset.id) : dsel.delete(cb.dataset.id); renderDeck(); });
   $app.querySelectorAll(".selc").forEach(cb => cb.onchange = () => { cb.checked ? sel.add(cb.dataset.id) : sel.delete(cb.dataset.id); renderDeck(); });
   const qi = document.getElementById("q");
   qi.oninput = () => { view.q = qi.value; const pos = qi.selectionStart; renderDeck(); const n = document.getElementById("q"); n.focus(); n.setSelectionRange(pos,pos); };
@@ -919,7 +930,7 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
-const APP_VERSION = "17"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "18"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -1115,10 +1126,17 @@ $app.addEventListener("click", e => {
       document.getElementById("delzone").innerHTML = nk
         ? `<span class="confirm">Este baralho tem ${nk} ${nk === 1 ? "subbaralho" : "subbaralhos"}. Não dá para desfazer. <button class="btn danger solid" data-act="deldeckall">Apagar tudo (${all} cartas)</button><button class="btn danger" data-act="deldeck">Só este (subbaralhos sobem um nível)</button><button class="btn ghost" data-act="nodel">Cancelar</button></span>`
         : `<span class="confirm">Apagar o baralho e ${ownCards(view.id).length} cartas? Não dá para desfazer. <button class="btn danger solid" data-act="deldeck">Apagar</button><button class="btn ghost" data-act="nodel">Cancelar</button></span>`; break; }
-    case "deldeckall": { const did = view.id; const up = parentOf(S.decks[did]); const ids = [...descendants(did)].filter(id => S.decks[id] && !(S.decks[id].shared && S.decks[id].owner !== me.uid)); const cards = deckCards(did).filter(c => ids.includes(c.deck)); (async () => { for (const c of cards) await store.delCard(c.id); for (const id of ids.reverse()) await store.delDeck(id); })(); toast(`Apagados ${ids.length} baralhos e ${cards.length} cartas`); go(up ? "deck" : "home", {id:up}); break; }
+    case "deldeckall": { const did = view.id; const up = parentOf(S.decks[did]); deleteDeckTree(did).then(r => toast(`Apagados ${r.decks} baralhos e ${r.cards} cartas`)); go(up ? "deck" : "home", {id:up}); break; }
     case "askempty": { const n = deckCards(view.id).length; document.getElementById("emptyzone").innerHTML = `<span class="confirm">Apagar ${n} cartas${childrenOf(view.id).length ? " deste baralho e dos subbaralhos" : ""}? Não dá para desfazer. <button class="btn danger solid" data-act="doempty">Apagar cartas</button><button class="btn ghost" data-act="noempty">Cancelar</button></span>`; break; }
     case "noempty": renderDeck(); break;
     case "doempty": { const cards = deckCards(view.id); (async () => { for (const c of cards) await store.delCard(c.id); })(); toast(`${cards.length} cartas apagadas`); renderDeck(); break; }
+    case "dselstart": view.dsel = new Set(); renderDeck(); break;
+    case "dselcancel": view.dsel = null; renderDeck(); break;
+    case "dseltoggle": view.dsel.has(id) ? view.dsel.delete(id) : view.dsel.add(id); renderDeck(); break;
+    case "dselall": { const ids = childrenOf(view.id).map(x => x.id); const all = ids.every(x => view.dsel.has(x)); ids.forEach(x => all ? view.dsel.delete(x) : view.dsel.add(x)); renderDeck(); break; }
+    case "dseldel": { const ids = [...view.dsel]; const nc = ids.reduce((n, x) => n + deckCards(x).length, 0); document.getElementById("dselconfirm").innerHTML = `<span class="confirm" style="margin-bottom:8px">Apagar ${ids.length} ${ids.length === 1 ? "subbaralho" : "subbaralhos"} e ${nc} cartas dentro? Não dá para desfazer. <button class="btn danger solid" data-act="dseldo">Apagar</button><button class="btn ghost" data-act="dselno">Não</button></span>`; break; }
+    case "dselno": document.getElementById("dselconfirm").innerHTML = ""; break;
+    case "dseldo": { const ids = [...view.dsel]; view.dsel = null; (async () => { let n = 0; for (const x of ids) n += (await deleteDeckTree(x)).cards; toast(`${ids.length} ${ids.length === 1 ? "subbaralho apagado" : "subbaralhos apagados"} (${n} cartas)`); renderDeck(); })(); renderDeck(); break; }
     case "selstart": view.sel = new Set(); renderDeck(); break;
     case "selcancel": view.sel = null; renderDeck(); break;
     case "selall": { const ids = [...document.querySelectorAll(".selc")].map(x => x.dataset.id); const all = ids.every(id => view.sel.has(id)); ids.forEach(id => all ? view.sel.delete(id) : view.sel.add(id)); renderDeck(); break; }
