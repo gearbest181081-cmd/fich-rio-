@@ -772,7 +772,7 @@ Constitucional;me;Capital do Brasil?;;Rio | Brasília | Salvador;B;;
 Português;lacuna;Crase é a fusão de {{a + a}}.;;;;;
 Português;basico;O que é próclise?;Pronome antes do verbo.;;;;</pre>
       <p class="hint">Tipos: <b>basico</b>, <b>ce</b> (gabarito C ou E), <b>me</b> (alternativas separadas por | e gabarito A–E) e <b>lacuna</b>. Se o baralho não existir, ele é criado.</p>
-      <div class="field"><label class="label" for="io-deck">Baralho para linhas sem baralho</label><select class="txt" id="io-deck"><option value="">Escolha…</option>${opts}</select></div>
+      <div class="field"><label class="label" for="io-deck">Baralho para linhas sem baralho</label><select class="txt" id="io-deck"><option value="">Escolha…</option>${opts}<option value="${NEWDECK}">+ Criar novo baralho</option></select>${newDeckFields("io")}</div>
       <div class="field"><label class="label" for="io-text">Linhas</label><textarea class="txt" id="io-text" placeholder="Cole aqui"></textarea></div>
       <div class="row"><label class="btn" for="io-file">Escolher arquivo</label><input type="file" id="io-file" accept=".csv,.txt,.tsv,text/plain,text/csv" hidden><button class="btn primary" data-act="doimport">Importar</button></div>
       <div id="io-msg"></div>
@@ -783,11 +783,14 @@ Português;basico;O que é próclise?;Pronome antes do verbo.;;;;</pre>
       <div class="row"><select class="txt" id="ex-deck" style="flex:1;min-width:180px"><option value="">Todos os baralhos</option>${opts}</select><button class="btn primary" data-act="doexport">Exportar CSV</button></div>
       <div id="ex-out"></div>
     </section>`;
+  wireNewDeck("io");
   document.getElementById("io-file").onchange = e => { const f = e.target.files[0]; if (!f) return; const fr = new FileReader(); fr.onload = () => { document.getElementById("io-text").value = String(fr.result).replace(/^﻿/, ""); toast("Arquivo carregado. Confira e toque em Importar."); }; fr.readAsText(f, "utf-8"); };
 }
 async function doImport(){
-  const text = document.getElementById("io-text").value; const def = document.getElementById("io-deck").value; const msg = document.getElementById("io-msg");
+  const text = document.getElementById("io-text").value; const msg = document.getElementById("io-msg");
   if (!text.trim()) { msg.innerHTML = `<p class="err">Cole linhas ou escolha um arquivo.</p>`; return; }
+  if (document.getElementById("io-deck").value === NEWDECK && !document.getElementById("io-newname").value.trim()) { msg.innerHTML = `<p class="err">Dê um nome para o novo baralho.</p>`; return; }
+  let def = ""; try { def = await resolveDeck("io") || ""; } catch(err){ console.error(err); msg.innerHTML = `<p class="err">Não consegui criar o baralho.</p>`; return; }
   const {out, errs, newDecks} = rowsToCards(parseCSV(text), def);
   if (!out.length) { msg.innerHTML = `<p class="err">Nenhuma carta importada.</p>` + errs.slice(0,8).map(e => `<p class="small muted">${esc(e)}</p>`).join(""); return; }
   msg.innerHTML = `<p class="small muted">Importando ${out.length} cartas…</p>`;
@@ -799,6 +802,29 @@ async function doImport(){
   else go("home");
 }
 
+/* novo baralho direto nas telas de importação */
+const NEWDECK = "__novo";
+function newDeckFields(prefix, suggested = ""){
+  return `<div class="stack" id="${prefix}-new" hidden style="gap:8px">
+    <input class="txt" id="${prefix}-newname" placeholder="Nome do novo baralho" value="${esc(suggested)}">
+    <label class="row small" style="gap:8px"><input type="checkbox" id="${prefix}-newshared"> Compartilhado (outras pessoas entram com código)</label></div>`;
+}
+function wireNewDeck(prefix){
+  const sel = document.getElementById(prefix + "-deck"), box = document.getElementById(prefix + "-new");
+  const upd = () => { box.hidden = sel.value !== NEWDECK; if (!box.hidden) document.getElementById(prefix + "-newname").focus(); };
+  sel.addEventListener("change", upd); upd();
+}
+// devolve o id do baralho escolhido, criando-o se for "novo"; null se faltar algo
+async function resolveDeck(prefix, fallbackName){
+  const v = document.getElementById(prefix + "-deck").value;
+  if (v !== NEWDECK) return v || null;
+  const name = (document.getElementById(prefix + "-newname").value || fallbackName || "").trim();
+  if (!name) return null;
+  const color = COLORS[Object.keys(S.decks).length % COLORS.length];
+  if (document.getElementById(prefix + "-newshared").checked) return await store.createShared(name, color);
+  const d = {id:uid(), name, color, created:Date.now()}; await store.putDeck(d); return d.id;
+}
+
 /* importar PDF */
 function renderPdf(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
@@ -807,7 +833,7 @@ function renderPdf(){
   if (!view.items) {
     $app.innerHTML = top + `<section class="panel stack" style="padding:16px">
       <p class="small muted">Escolha a prova ou a lista de questões em PDF. O Fichário separa enunciado, alternativas e gabarito e mostra tudo para você conferir antes de salvar.</p>
-      <div class="field"><label class="label" for="pdf-deck">Salvar no baralho</label><select class="txt" id="pdf-deck"><option value="">Escolha…</option>${opts}</select></div>
+      <div class="field"><label class="label" for="pdf-deck">Salvar no baralho</label><select class="txt" id="pdf-deck"><option value="">Escolha…</option>${opts}<option value="${NEWDECK}" ${decks.length ? "" : "selected"}>+ Criar novo baralho</option></select>${newDeckFields("pdf")}</div>
       <div class="row"><label class="btn primary" for="pdf-file" style="min-height:46px">Escolher PDF</label><input type="file" id="pdf-file" accept="application/pdf,.pdf" hidden></div>
       <p id="pdf-msg" class="small muted" aria-live="polite"></p>
       <details><summary class="small" style="cursor:pointer;font-weight:700">Que tipo de PDF funciona?</summary><div class="stack small muted" style="gap:6px;margin-top:8px">
@@ -815,10 +841,15 @@ function renderPdf(){
         <p>O gabarito pode estar no fim do arquivo (1-C 2-A ou em tabela) ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Comentários depois de "Comentário:" também entram.</p>
         <p>PDF escaneado (foto da página) não tem texto e não dá para ler. Questões sem gabarito aparecem para você marcar a resposta.</p></div></details>
     </section>`;
+    wireNewDeck("pdf");
     document.getElementById("pdf-file").onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
-      const deck = document.getElementById("pdf-deck").value; const msg = document.getElementById("pdf-msg");
-      if (!deck) { msg.innerHTML = `<span class="err">Escolha o baralho primeiro.</span>`; e.target.value = ""; return; }
+      const msg = document.getElementById("pdf-msg");
+      const isNew = document.getElementById("pdf-deck").value === NEWDECK;
+      let deck = null;
+      try { deck = await resolveDeck("pdf", f.name.replace(/\.pdf$/i, "")); } catch(err){ console.error(err); }
+      if (!deck) { msg.innerHTML = `<span class="err">${isNew ? "Não consegui criar o baralho. Confira o nome." : "Escolha o baralho primeiro."}</span>`; e.target.value = ""; return; }
+      if (isNew) toast("Baralho criado");
       view.deck = deck; view.busy = true; msg.textContent = "Lendo o PDF…";
       try {
         const text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo página ${p} de ${n}…`; });
