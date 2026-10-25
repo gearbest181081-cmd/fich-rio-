@@ -163,14 +163,15 @@ export function parseQuestions(text){
       if (g) { const a = normAnswer(g[1] === "8" ? "B" : g[1]); // leitura por imagem às vezes troca o B por 8
         if (a) { q.answer = a; mode = "after"; continue; } }
       // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
-      if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { mode = "skip"; continue; }
+      // (no meio do comentário, só pula a linha: costuma ser o cabeçalho da página seguinte)
+      if (INSTR.test(l) || (l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l))) { if (mode !== "comment" && mode !== "after") mode = "skip"; continue; }
       const c = l.match(COMMENT);
       if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
       const a = l.match(ALT);
       if (a && mode !== "comment" && a[1].toUpperCase() === "ABCDE"[q.options.length]) { q.options.push(a[2].trim()); mode = "opt"; continue; }
       if (mode === "front") q.front += (q.front ? " " : "") + l;
       else if (mode === "opt") q.options[q.options.length - 1] += " " + l;
-      else if (mode === "comment") q.comment += (q.comment ? " " : "") + l;
+      else if (mode === "comment" || mode === "after") q.comment += (q.comment ? " " : "") + l; // explicação que vem depois do "Gabarito: D" também entra
     }
     close();
     return qs;

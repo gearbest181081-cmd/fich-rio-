@@ -698,9 +698,9 @@ function renderStudy(){
   if (done) {
     if (auto) {
       const gab = c.type === "ce" ? (c.answer === "C" ? "Certo" : "Errado") : c.type === "mc" ? LETTERS[c.correct] : clozeAnswers(c.front).map(plain).join(" / ");
-      body += `<div class="result ${ans.right ? "ok" : "no"}">${ans.right ? "Você acertou." : (c.type === "cloze" ? "Resposta: " : "Você errou. Gabarito: ") + esc(gab) + "."}</div>`;
+      body += `<div class="result ${ans.right ? "ok" : "no"}">${ans.right ? (c.type === "cloze" ? "Você acertou." : "Você acertou. Gabarito: " + esc(gab) + ".") : (c.type === "cloze" ? "Resposta: " : "Você errou. Gabarito: ") + esc(gab) + "."}</div>`;
     }
-    if (!isBlank(c.comment)) body += `<div class="comment content">${c.comment}</div>`;
+    if (!isBlank(c.comment)) body += `<div class="comment content"><div class="small" style="font-weight:700;margin-bottom:4px">Comentário</div>${c.comment}</div>`;
     if (auto && !ans.right) actions = `<div class="grades three" style="grid-template-columns:1fr"><button class="grade g1" data-act="grade" data-g="1">Continuar<small>volta em 10 min</small></button></div>`;
     else {
       const gs = auto ? [2,3,4] : [1,2,3,4];
@@ -983,7 +983,7 @@ function renderPdf(){
         <div class="row spread"><label class="row" style="gap:8px;font-weight:700"><input type="checkbox" class="pdf-inc" id="pdf-inc${i}" data-i="${i}" ${has ? "checked" : ""}> Questão ${q.num} <span class="tchip">${TSHORT[q.type]}</span></label>${gab}</div>
         <textarea class="txt typed-in" id="pdf-f${i}" rows="3" style="margin:0">${esc(q.front)}</textarea>
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
-        ${q.comment ? `<p class="small muted"><b>Comentário:</b> ${esc(q.comment)}</p>` : ""}
+        <details ${q.comment ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">${q.comment ? "Comentário" : "Adicionar comentário"}</summary><textarea class="txt" id="pdf-c${i}" rows="3" style="margin-top:6px" placeholder="Por que essa é a resposta">${esc(q.comment || "")}</textarea></details>
       </article>`; }).join("")}</div>
     <div class="row spread" style="margin-top:16px;position:sticky;bottom:0;background:var(--bg);padding-block:10px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)">
       <button class="btn" data-act="pdfagain">Escolher outro PDF</button>
@@ -996,7 +996,7 @@ function renderPdf(){
   if (kf) kf.onchange = async e => {
     const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg");
     // guarda o que já foi editado antes de redesenhar
-    view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
+    view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; const c2 = document.getElementById("pdf-c" + i); if (c2) q.comment = c2.value; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
     try { const n = await applyKeyFile(f, view.items, msg); if (!n) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; return; } view.keyNote = {ok:true, text:`Gabarito de ${f.name} aplicado em ${n} de ${view.items.length} questões.`}; renderPdf(); }
     catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler esse PDF.</span>`; }
   };
@@ -1011,7 +1011,8 @@ async function pdfImport(){
     const g = document.getElementById("pdf-g" + i).value;
     const front = esc(document.getElementById("pdf-f" + i).value.trim()).replace(/\n/g, "<br>");
     if (g === "") { missing.push(q.num); return; }
-    const c = {deck, type:q.type, front, comment:q.comment ? esc(q.comment) : "", tags:[]};
+    const cm = (document.getElementById("pdf-c" + i)?.value ?? q.comment ?? "").trim();
+    const c = {deck, type:q.type, front, comment:cm ? esc(cm).replace(/\n/g, "<br>") : "", tags:[]};
     if (q.type === "mc") { c.options = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim()).filter(Boolean); c.correct = Math.min(+g, c.options.length - 1); }
     else c.answer = g;
     cards.push(c);
