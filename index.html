@@ -198,7 +198,7 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager, doc, collection, setDoc, deleteDoc, updateDoc, getDoc, onSnapshot, query, where, arrayUnion, arrayRemove, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 (() => {
 "use strict";
@@ -867,6 +867,8 @@ document.addEventListener("keydown", e => {
 const AUTH_ERR = {"auth/invalid-credential":"E-mail ou senha incorretos.","auth/wrong-password":"E-mail ou senha incorretos.","auth/user-not-found":"Não existe conta com esse e-mail. Toque em Criar conta.","auth/email-already-in-use":"Já existe uma conta com esse e-mail. Toque em Entrar.","auth/weak-password":"A senha precisa ter pelo menos 6 caracteres.","auth/invalid-email":"Esse e-mail não parece válido.","auth/too-many-requests":"Muitas tentativas. Espere alguns minutos.","auth/network-request-failed":"Sem internet. Confira a conexão.","auth/operation-not-allowed":"Esse tipo de login ainda não foi ativado no Firebase.","auth/configuration-not-found":"O login ainda não foi ativado no Firebase (Authentication > Método de login).","auth/unauthorized-domain":"Este endereço ainda não foi autorizado no Firebase (Authentication > Configurações > Domínios autorizados)."};
 const authMsg = e => AUTH_ERR[e && e.code] || "Não deu certo (" + (e && e.code || "erro") + "). Tente de novo.";
 let authMode = "login";
+// WhatsApp, Instagram e Facebook abrem links num navegador interno onde o Google bloqueia o login
+const inApp = /WhatsApp|Instagram|FBAN|FBAV|FB_IAB|Line\/|Snapchat|TikTok|; wv\)/i.test(navigator.userAgent);
 function renderAuth(msg = ""){
   view = {name:"auth"};
   const signup = authMode === "signup";
@@ -883,7 +885,7 @@ function renderAuth(msg = ""){
         ${signup ? "" : `<button type="button" class="btn ghost small" data-auth="reset">Esqueci a senha</button>`}
       </form>
       <div class="or">ou</div>
-      <button type="button" class="btn" style="min-height:46px" data-auth="google">Entrar com Google</button>
+      ${inApp ? `<p class="banner" style="margin:0">Para entrar com Google, abra este link no Safari ou no Chrome: toque nos três pontinhos (ou no ícone de compartilhar) e escolha "Abrir no navegador". Por aqui, use e-mail e senha.</p>` : `<button type="button" class="btn" style="min-height:46px" data-auth="google">Entrar com Google</button>`}
     </div></div>`;
   const err = m => { const p = document.getElementById("a-err"); p.textContent = m; p.hidden = false; };
   document.getElementById("fauth").onsubmit = async e => {
@@ -910,7 +912,11 @@ document.addEventListener("click", async e => {
   if (a === "google") {
     const prov = new GoogleAuthProvider();
     try { await signInWithPopup(store.auth(), prov); }
-    catch(x){ if (x.code === "auth/popup-blocked" || x.code === "auth/operation-not-supported-in-this-environment") signInWithRedirect(store.auth(), prov); else if (x.code !== "auth/popup-closed-by-user" && x.code !== "auth/cancelled-popup-request") renderAuth(authMsg(x)); }
+    catch(x){
+      if (x.code === "auth/popup-blocked") renderAuth("O navegador bloqueou a janela do Google. Permita pop-ups para este site ou use e-mail e senha.");
+      else if (x.code === "auth/operation-not-supported-in-this-environment") renderAuth("Este navegador não permite entrar com Google. Abra no Safari ou no Chrome, ou use e-mail e senha.");
+      else if (x.code !== "auth/popup-closed-by-user" && x.code !== "auth/cancelled-popup-request") renderAuth(authMsg(x));
+    }
   }
 });
 
