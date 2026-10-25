@@ -18,10 +18,16 @@ function loadPdfjs(){
 function pageLines(items, width){
   const its = items.filter(i => i.str && i.str.trim()).map(i => ({s:i.str, x:i.transform[4], y:i.transform[5], w:i.width || 0, h:Math.abs(i.transform[3]) || 10}));
   if (!its.length) return [];
-  const mid = width / 2;
-  const cross = its.filter(i => i.x < mid - 4 && i.x + i.w > mid + 4).length;
-  const left = its.filter(i => i.x + i.w <= mid + 4), right = its.filter(i => i.x >= mid - 4);
-  const cols = (cross / its.length < 0.04 && left.length > 5 && right.length > 5) ? [its.filter(i => i.x < mid), its.filter(i => i.x >= mid)] : [its];
+  // duas colunas só quando, nas linhas que têm texto dos dois lados, sobra um corredor vazio no meio da página
+  const mid = width / 2, hs = width * 0.012;
+  const rows = []; [...its].sort((a, b) => b.y - a.y).forEach(i => { const r = rows[rows.length - 1]; if (r && Math.abs(r.y - i.y) <= Math.max(2, i.h * 0.45)) r.its.push(i); else rows.push({y:i.y, its:[i]}); });
+  let both = 0, free = 0;
+  for (const r of rows) {
+    if (!r.its.some(i => i.x + i.w < mid) || !r.its.some(i => i.x > mid)) continue;
+    both++; if (!r.its.some(i => i.x < mid + hs && i.x + i.w > mid - hs)) free++;
+  }
+  const left = its.filter(i => i.x + i.w <= mid + hs), right = its.filter(i => i.x >= mid - hs);
+  const cols = (both >= 3 && free / both >= 0.85 && left.length > 5 && right.length > 5) ? [its.filter(i => i.x < mid), its.filter(i => i.x >= mid)] : [its];
   const out = [];
   for (const col of cols) {
     col.sort((a, b) => b.y - a.y || a.x - b.x);
@@ -59,7 +65,7 @@ export async function extractPdfText(file, onProgress){
 const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,3})\s*(?:[.)\-–—:]|\s)\s*(.*)$/i;
 const ALT = /^\(?([A-Ea-e])\s*[).\-–—]\s+(.*)$/;
 // gabarito logo depois da questão: "Gabarito: B", "GABARITO: LETRA C", "Gab. C", "Resposta correta: (B)", "Alternativa correta: letra B"
-const GAB_LINE = /^(?:gabarito|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:\-–]?\s*\(?(certo|errado|[a-e8])\)?(?![a-zà-ú\d])/i;
+const GAB_LINE = /^(?:g[a4]b[a4]r[i1l|!][t7][o0]|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:;,\-–]?\s*\(?(certo|errado|[a-e8])\)?(?![a-zà-ú\d])/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
 // instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
 const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;

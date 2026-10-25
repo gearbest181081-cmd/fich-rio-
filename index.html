@@ -863,7 +863,7 @@ async function showOcr(f){
       view.busy = false; try { lock && lock.release(); } catch(e){}
       const items = parseQuestions(text);
       if (!items.length) { om.innerHTML = `<span class="err">Li as páginas, mas não reconheci questões numeradas nelas.</span> Tente outras páginas ou confira abaixo o que foi lido.`; box.insertAdjacentHTML("beforeend", `<details><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido</summary><textarea class="txt" readonly style="margin-top:8px">${esc(text)}</textarea></details>`); go.disabled = false; stop.hidden = true; return; }
-      await finishPdf(items, f.name + ` (páginas ${from}–${to})`, om);
+      await finishPdf(items, f.name + ` (páginas ${from}–${to})`, om, text);
     } catch(err){ console.error(err); try { lock && lock.release(); } catch(e){} view.busy = false; go.disabled = false; stop.hidden = true; om.innerHTML = `<span class="err">Não consegui ler as páginas. Confira a internet e tente de novo com menos páginas.</span>`; }
   };
 }
@@ -894,6 +894,7 @@ async function resolveDeck(prefix, fallbackName){
 }
 
 /* importar PDF */
+const APP_VERSION = "12"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -910,8 +911,8 @@ async function applyKeyFile(f, items, msg){
   });
   return n;
 }
-async function finishPdf(items, name, msg){
-  view.keyNote = null;
+async function finishPdf(items, name, msg, text){
+  view.keyNote = null; view.rawText = text || "";
   if (view.keyFile) {
     try { const n = await applyKeyFile(view.keyFile, items, msg); view.keyNote = n ? {ok:true, text:`Gabarito de ${view.keyFile.name} aplicado em ${n} de ${items.length} questões.`} : {ok:false, text:`Não encontrei no arquivo ${view.keyFile.name} respostas com os números dessas questões.`}; }
     catch(err){ console.error(err); view.keyNote = {ok:false, text:`Não consegui ler o gabarito ${view.keyFile.name}.`}; }
@@ -935,6 +936,7 @@ function renderPdf(){
         <p>O gabarito pode vir num PDF separado (escolha no passo 2) ou estar em qualquer parte da própria prova, nas primeiras páginas ou no fim (1-C 2-A ou em tabela), ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Ele é ligado sozinho a cada questão pelo número. Comentários depois de "Comentário:" também entram.</p>
         <p>PDF escaneado (foto da página) também funciona: o Fichário lê as páginas como imagem. É mais lento, então você escolhe quais páginas ler. Questões sem gabarito aparecem para você marcar a resposta.</p></div></details>
       <div id="ocr-box" hidden></div>
+      <p class="hint" style="text-align:right">Versão ${APP_VERSION}</p>
     </section>`;
     wireNewDeck("pdf");
     const pick = view.pick = {prova:null, gab:null};
@@ -957,7 +959,7 @@ function renderPdf(){
         if (text.replace(/\s/g, "").length < 40) { view.scanFile = f; showOcr(f); return; }
         const items = parseQuestions(text);
         if (!items.length) { readBtn.disabled = false; msg.innerHTML = `<span class="err">Li o PDF, mas não reconheci questões numeradas nele.</span> Confira se escolheu a prova (e não o gabarito) no passo 1.`; return; }
-        await finishPdf(items, f.name, msg);
+        await finishPdf(items, f.name, msg, text);
       } catch(err){ console.error(err); view.busy = false; readBtn.disabled = false; msg.innerHTML = `<span class="err">Não consegui abrir esse PDF. Ele pode estar protegido por senha ou corrompido.</span>`; }
     };
     return;
@@ -985,6 +987,7 @@ function renderPdf(){
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
         <details ${q.comment ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">${q.comment ? "Comentário" : "Adicionar comentário"}</summary><textarea class="txt" id="pdf-c${i}" rows="3" style="margin-top:6px" placeholder="Por que essa é a resposta">${esc(q.comment || "")}</textarea></details>
       </article>`; }).join("")}</div>
+    ${view.rawText ? `<details style="margin-top:14px"><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido do PDF</summary><p class="hint" style="margin-top:6px">Se alguma questão veio errada, mande um print deste texto para o Claude.</p><textarea class="txt" readonly rows="12" style="margin-top:6px;font-size:.85rem">${esc(view.rawText.slice(0, 60000))}</textarea></details>` : ""}
     <div class="row spread" style="margin-top:16px;position:sticky;bottom:0;background:var(--bg);padding-block:10px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)">
       <button class="btn" data-act="pdfagain">Escolher outro PDF</button>
       <button class="btn primary" id="pdf-go" data-act="pdfimport" style="min-height:46px">Importar</button>
