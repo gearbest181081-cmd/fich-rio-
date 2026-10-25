@@ -99,15 +99,30 @@ export function parseQuestions(text){
   // cabeçalhos e rodapés que se repetem em várias páginas
   const freq = {}; lines.forEach(l => freq[l] = (freq[l] || 0) + 1);
   lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l)));
-  // seção de gabarito no fim: última linha que é só "Gabarito..." e tem respostas depois
-  let key = {};
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^gabarito\b/i.test(lines[i]) && i > lines.length * 0.4) {
-      const k = parseKey([lines[i].replace(/^gabarito\s*\S*\s*[:\-–]?/i, ""), ...lines.slice(i+1)]);
-      if (Object.keys(k).length >= 2) { key = k; lines = lines.slice(0, i); }
-      break;
+  // gabarito em qualquer parte do arquivo (primeiras páginas, fim ou meio):
+  // linhas só com pares "1-C 2-A", tabela de números com letras embaixo, ou pares logo após um título "Gabarito"
+  const key = {};
+  const pairRe = /(\d{1,3})\s*[\-–—.:)]?\s*(certo|errado|anulad[ao]|[a-e])(?![a-zà-ú])/gi;
+  const isKeyTok = a => /^(?:[a-e]|certo|errado|x|\*|anulad[ao])$/i.test(a);
+  const addPairs = l => { for (const m of l.matchAll(pairRe)) { const a = normAnswer(m[2]); if (a) key[+m[1]] = a; } };
+  const kept = []; let inKey = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^gabaritos?\b/i.test(l) && !/^gabarito\s*[:\-–]?\s*(?:certo|errado|[a-e])\.?$/i.test(l)) {
+      inKey = true; addPairs(l.replace(/^gabaritos?\s*(?:oficial|definitivo|preliminar)?\s*[:\-–]?\s*/i, "")); continue;
     }
+    const nums = l.replace(/^(?:ite(?:m|ns)|quest(?:[õo]es|[ãa]o)|n[º°o]\.?)\s*/i, "").split(/\s+/);
+    if (nums.length > 1 && nums.every(n => /^\d{1,3}$/.test(n)) && lines[i+1]) {
+      const ans = lines[i+1].replace(/^(?:gabarito|respostas?|gab\.?)\s*:?\s*/i, "").split(/\s+/);
+      if (ans.length === nums.length && ans.every(isKeyTok)) { nums.forEach((n, k) => { const a = normAnswer(ans[k]); if (a) key[+n] = a; }); i++; inKey = true; continue; }
+    }
+    const pairs = [...l.matchAll(pairRe)].length;
+    const leftover = l.replace(pairRe, "").replace(/[\s|;,.\-–—()]/g, "");
+    if ((pairs >= 3 && leftover.length <= 8) || (inKey && pairs >= 1 && leftover.length <= 4)) { addPairs(l); continue; }
+    if (inKey && l.length > 25) inKey = false;
+    kept.push(l);
   }
+  lines = kept;
   // separa alternativas que vieram na mesma linha: "(A) x (B) y"
   lines = lines.flatMap(l => ALT.test(l) && /\s\(?[B-E]\s*[).]\s/.test(l) ? l.split(/\s(?=\(?[B-E]\s*[).]\s)/) : [l]);
   // "(A)" no meio da linha (comum no OCR): quebra antes de cada alternativa entre parênteses

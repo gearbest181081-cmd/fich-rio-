@@ -841,25 +841,30 @@ async function showOcr(f){
   msg.textContent = "";
   box.hidden = false;
   box.innerHTML = `<div class="stack" style="gap:10px;border-top:1px solid var(--line);padding-top:12px">
-    <p><b>Esse PDF é escaneado</b> (as páginas são imagens). Posso ler as páginas como imagem. Leva alguns segundos por página, então comece com poucas para testar.</p>
-    <div class="row small" style="gap:8px"><label for="ocr-from">Da página</label><input class="txt num" id="ocr-from" type="number" min="1" max="${n}" value="1" style="width:5.5em"><label for="ocr-to">até</label><input class="txt num" id="ocr-to" type="number" min="1" max="${n}" value="${Math.min(n, 5)}" style="width:5.5em"><span class="muted">de ${n}</span></div>
-    <div class="row"><button class="btn primary" id="ocr-go" type="button">Ler páginas</button><button class="btn ghost" id="ocr-stop" type="button" hidden>Parar</button></div>
+    <p><b>Esse PDF é escaneado</b> (as páginas são imagens), então vou ler as páginas como imagem. O gabarito pode estar em qualquer página, inclusive nas primeiras: ele é ligado sozinho a cada questão.</p>
+    <div class="row small" style="gap:8px"><label for="ocr-from">Da página</label><input class="txt num" id="ocr-from" type="number" min="1" max="${n}" value="1" style="width:5.5em"><label for="ocr-to">até</label><input class="txt num" id="ocr-to" type="number" min="1" max="${n}" value="${n}" style="width:5.5em"><span class="muted">de ${n}</span></div>
+    <p class="hint" id="ocr-est"></p>
+    <div class="row"><button class="btn primary" id="ocr-go" type="button" style="min-height:46px">Ler páginas</button><button class="btn ghost" id="ocr-stop" type="button" hidden>Parar</button></div>
+    <p class="hint">Deixe a tela ligada e o app aberto enquanto lê. Se parar no meio, o que já foi lido é aproveitado.</p>
     <div class="bar" id="ocr-bar" hidden><i style="width:0%"></i></div>
     <p id="ocr-msg" class="small muted" aria-live="polite"></p></div>`;
   const go = document.getElementById("ocr-go"), stop = document.getElementById("ocr-stop"), bar = document.getElementById("ocr-bar"), om = document.getElementById("ocr-msg");
   stop.onclick = () => { cancelOcr(); om.textContent = "Parando…"; };
+  const est = () => { const a = +document.getElementById("ocr-from").value || 1, b = +document.getElementById("ocr-to").value || a; const pages = Math.max(1, b - a + 1); const min = Math.max(1, Math.round(pages * 7 / 60)); go.textContent = pages === n ? `Ler todas as ${n} páginas` : `Ler ${pages} ${pages === 1 ? "página" : "páginas"}`; document.getElementById("ocr-est").textContent = `Tempo estimado no celular: cerca de ${min} ${min === 1 ? "minuto" : "minutos"}.`; };
+  ["ocr-from","ocr-to"].forEach(id => document.getElementById(id).addEventListener("input", est)); est();
   go.onclick = async () => {
     const from = Math.max(1, Math.min(n, +document.getElementById("ocr-from").value || 1));
     const to = Math.max(from, Math.min(n, +document.getElementById("ocr-to").value || from));
     go.disabled = true; stop.hidden = false; bar.hidden = false; view.busy = true;
+    let lock = null; try { lock = await navigator.wakeLock?.request("screen"); } catch(e){}
     om.textContent = "Preparando o leitor (na primeira vez baixa uns 5 MB)…";
     try {
       const text = await ocrPdf(f, from, to, (cur, tot, fr) => { const pct = Math.round(((cur - 1) + fr) / tot * 100); bar.firstElementChild.style.width = pct + "%"; om.textContent = `Lendo página ${from + cur - 1} (${cur} de ${tot})… ${pct}%`; });
-      view.busy = false;
+      view.busy = false; try { lock && lock.release(); } catch(e){}
       const items = parseQuestions(text);
       if (!items.length) { om.innerHTML = `<span class="err">Li as páginas, mas não reconheci questões numeradas nelas.</span> Tente outras páginas ou confira abaixo o que foi lido.`; box.insertAdjacentHTML("beforeend", `<details><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido</summary><textarea class="txt" readonly style="margin-top:8px">${esc(text)}</textarea></details>`); go.disabled = false; stop.hidden = true; return; }
       view.items = items; view.file = f.name + ` (páginas ${from}–${to})`; renderPdf();
-    } catch(err){ console.error(err); view.busy = false; go.disabled = false; stop.hidden = true; om.innerHTML = `<span class="err">Não consegui ler as páginas. Confira a internet e tente de novo com menos páginas.</span>`; }
+    } catch(err){ console.error(err); try { lock && lock.release(); } catch(e){} view.busy = false; go.disabled = false; stop.hidden = true; om.innerHTML = `<span class="err">Não consegui ler as páginas. Confira a internet e tente de novo com menos páginas.</span>`; }
   };
 }
 
@@ -901,7 +906,7 @@ function renderPdf(){
       <p id="pdf-msg" class="small muted" aria-live="polite"></p>
       <details><summary class="small" style="cursor:pointer;font-weight:700">Que tipo de PDF funciona?</summary><div class="stack small muted" style="gap:6px;margin-top:8px">
         <p>Questões numeradas (1., 1), Questão 1 ou 51 no estilo Cebraspe), com alternativas (A) a (E) ou itens de certo/errado.</p>
-        <p>O gabarito pode estar no fim do arquivo (1-C 2-A ou em tabela) ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Comentários depois de "Comentário:" também entram.</p>
+        <p>O gabarito pode estar em qualquer parte do arquivo, nas primeiras páginas ou no fim (1-C 2-A ou em tabela), ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Ele é ligado sozinho a cada questão pelo número. Comentários depois de "Comentário:" também entram.</p>
         <p>PDF escaneado (foto da página) também funciona: o Fichário lê as páginas como imagem. É mais lento, então você escolhe quais páginas ler. Questões sem gabarito aparecem para você marcar a resposta.</p></div></details>
       <div id="ocr-box" hidden></div>
     </section>`;
