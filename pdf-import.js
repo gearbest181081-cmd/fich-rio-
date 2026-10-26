@@ -1,16 +1,13 @@
 // Lê questões de concurso de um PDF: extrai o texto com o pdf.js (vendor/)
 // e separa enunciado, alternativas, gabarito e comentário.
 
+// pdf.js 4.10.38 (versão legacy, para celulares mais antigos), carregado só quando alguém abre um PDF
 let pdfjsReady = null;
 function loadPdfjs(){
-  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
-  if (!pdfjsReady) pdfjsReady = new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = new URL("vendor/pdf.min.js", document.baseURI).href;
-    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("vendor/pdf.worker.min.js", document.baseURI).href; res(window.pdfjsLib); };
-    s.onerror = () => { pdfjsReady = null; rej(new Error("pdfjs")); };
-    document.head.appendChild(s);
-  });
+  if (!pdfjsReady) pdfjsReady = import(new URL("vendor/pdfjs/pdf.min.mjs", document.baseURI).href).then(lib => {
+    lib.GlobalWorkerOptions.workerSrc = new URL("vendor/pdfjs/pdf.worker.min.mjs", document.baseURI).href;
+    return lib;
+  }, e => { pdfjsReady = null; const err = new Error("pdfjs"); err.code = "pdfjs-load"; err.cause = e; throw err; });
   return pdfjsReady;
 }
 
@@ -43,7 +40,8 @@ let lastDoc = null, lastFile = null;
 async function openDoc(file){
   if (lastFile === file && lastDoc) return lastDoc;
   const pdfjs = await loadPdfjs();
-  lastDoc = await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise; lastFile = file;
+  // isEvalSupported:false: o pdf.js nunca monta código a partir das fontes do PDF (proteção contra PDF malicioso)
+  lastDoc = await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer()), isEvalSupported:false}).promise; lastFile = file;
   return lastDoc;
 }
 export async function pdfPageCount(file){ return (await openDoc(file)).numPages; }

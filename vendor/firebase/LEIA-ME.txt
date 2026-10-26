@@ -1,0 +1,4 @@
+SDK Web do Firebase 10.12.2 (npm "firebase", arquivos firebase-app.js, firebase-auth.js e firebase-firestore.js),
+servido pelo próprio site em vez de www.gstatic.com. Única mudança: em firebase-auth.js e firebase-firestore.js,
+o import de "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js" virou "./firebase-app.js".
+Licença: Apache 2.0 (cabeçalho de cada arquivo).

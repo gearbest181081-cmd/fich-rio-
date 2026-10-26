@@ -15,36 +15,74 @@ service cloud.firestore {
     match /sharedDecks/{deckId} {
       function before() { return resource.data; }
       function after() { return request.resource.data; }
-      // no mapa de nomes, cada pessoa só mexe no próprio nome
-      function onlyMyName() {
-        return after().get('names', {}).diff(before().get('names', {})).affectedKeys().hasOnly([request.auth.uid]);
-      }
+      function changed() { return after().diff(before()).affectedKeys(); }
+      function isMember() { return request.auth.uid in before().members; }
+      // quem o dono removeu não volta com o mesmo código
+      function banned(d) { return d.get('banned', []); }
+      function okName() { return after().name is string && after().name.size() > 0 && after().name.size() <= 200; }
       function okColor() {
         return !('color' in after()) || (after().color is string && after().color.matches('^#[0-9A-Fa-f]{3,8}$'));
       }
+      // no mapa de nomes, cada pessoa só mexe no próprio nome, que é um texto curto
+      function onlyMyName() {
+        let names = after().get('names', {});
+        return names.diff(before().get('names', {})).affectedKeys().hasOnly([request.auth.uid])
+          && (!(request.auth.uid in names) || (names[request.auth.uid] is string && names[request.auth.uid].size() <= 100));
+      }
 
-      allow get: if signedIn();
+      allow get: if signedIn() && (resource == null || !(request.auth.uid in banned(resource.data)));
       allow list: if signedIn() && request.auth.uid in resource.data.members;
       allow create: if signedIn()
+        && after().keys().hasOnly(['name', 'color', 'owner', 'members', 'names', 'created'])
         && after().owner == request.auth.uid
         && after().members == [request.auth.uid]
-        && okColor();
-      allow update: if signedIn() && after().owner == before().owner && okColor() && onlyMyName() && (
-        // Membro: renomeia o baralho ou sai dele. Não coloca nem tira outras pessoas.
-        (request.auth.uid in before().members
-          && (after().members.toSet() == before().members.toSet()
-            || (after().members.toSet() == before().members.toSet().difference([request.auth.uid].toSet())
-              && request.auth.uid != before().owner)))
-        // Quem tem o código: só se inclui.
-        || (!(request.auth.uid in before().members)
-          && after().diff(before()).affectedKeys().hasOnly(['members', 'names'])
-          && after().members.toSet() == before().members.toSet().union([request.auth.uid].toSet()))
+        && after().get('names', {}).keys().hasOnly([request.auth.uid])
+        && okName() && okColor();
+      allow update: if signedIn() && after().owner == before().owner && (
+        // Quem participa renomeia o baralho.
+        (isMember() && changed().hasOnly(['name']) && okName())
+        // Quem participa sai. O dono não sai: ele apaga o baralho.
+        || (isMember() && request.auth.uid != before().owner
+          && changed().hasOnly(['members', 'names'])
+          && after().members.toSet() == before().members.toSet().difference([request.auth.uid].toSet())
+          && onlyMyName())
+        // Quem tem o código entra, se o dono não tiver removido essa pessoa antes.
+        || (!isMember() && !(request.auth.uid in banned(before()))
+          && changed().hasOnly(['members', 'names'])
+          && after().members.toSet() == before().members.toSet().union([request.auth.uid].toSet())
+          && after().members.size() <= 50
+          && onlyMyName())
+        // O dono remove participantes (e impede a volta com o código) ou deixa alguém voltar.
+        || (request.auth.uid == before().owner
+          && changed().hasOnly(['members', 'banned'])
+          && after().members.toSet().difference(before().members.toSet()).size() == 0
+          && request.auth.uid in after().members
+          && banned(after()) is list && banned(after()).size() <= 100
+          && !(request.auth.uid in banned(after())))
       );
       allow delete: if signedIn() && resource.data.owner == request.auth.uid;
 
       match /cards/{cardId} {
-        allow read, write: if signedIn()
-          && request.auth.uid in get(/databases/$(database)/documents/sharedDecks/$(deckId)).data.members;
+        function member() {
+          return request.auth.uid in get(/databases/$(database)/documents/sharedDecks/$(deckId)).data.members;
+        }
+        function text(c, k) { return !(k in c) || (c[k] is string && c[k].size() <= 700000); }
+        // só os campos que o app grava, com tipo e tamanho conferidos; o autor é quem grava
+        function okCard() {
+          let c = request.resource.data;
+          return c.keys().hasOnly(['type', 'front', 'back', 'comment', 'answer', 'options', 'correct', 'tags', 'created', 'by'])
+            && c.by == request.auth.uid
+            && c.type in ['basic', 'ce', 'mc', 'cloze']
+            && c.front is string && c.front.size() <= 700000
+            && text(c, 'back') && text(c, 'comment')
+            && (!('answer' in c) || c.answer in ['C', 'E'])
+            && (!('options' in c) || (c.options is list && c.options.size() <= 10))
+            && (!('correct' in c) || c.correct is int)
+            && (!('tags' in c) || (c.tags is list && c.tags.size() <= 30))
+            && (!('created' in c) || c.created is number);
+        }
+        allow read, delete: if signedIn() && member();
+        allow create, update: if signedIn() && member() && okCard();
       }
     }
   }
