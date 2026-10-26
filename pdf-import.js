@@ -12,7 +12,7 @@ function loadPdfjs(){
 }
 
 // Junta os pedaços de texto de uma página em linhas, respeitando provas em duas colunas.
-function pageLines(items, width){
+function pageLines(items, width, columns = true){
   const its = items.filter(i => i.str && i.str.trim()).map(i => ({s:i.str, x:i.transform[4], y:i.transform[5], w:i.width || 0, h:Math.abs(i.transform[3]) || 10}));
   if (!its.length) return [];
   // duas colunas só quando, nas linhas que têm texto dos dois lados, sobra um corredor vazio no meio da página
@@ -24,7 +24,7 @@ function pageLines(items, width){
     both++; if (!r.its.some(i => i.x < mid + hs && i.x + i.w > mid - hs)) free++;
   }
   const left = its.filter(i => i.x + i.w <= mid + hs), right = its.filter(i => i.x >= mid - hs);
-  const cols = (both >= 3 && free / both >= 0.85 && left.length > 5 && right.length > 5) ? [its.filter(i => i.x < mid), its.filter(i => i.x >= mid)] : [its];
+  const cols = (columns && both >= 3 && free / both >= 0.85 && left.length > 5 && right.length > 5) ? [its.filter(i => i.x < mid), its.filter(i => i.x >= mid)] : [its];
   const out = [];
   for (const col of cols) {
     col.sort((a, b) => b.y - a.y || a.x - b.x);
@@ -48,14 +48,15 @@ export async function pdfPageCount(file){ return (await openDoc(file)).numPages;
 
 // texto de cada página na última extração (para achar páginas que são só imagem no meio de um PDF com texto)
 export const lastText = {pages:{}};
-export async function extractPdfText(file, onProgress){
+// columns:false lê cada linha de ponta a ponta (gabarito em tabela: com colunas, a metade direita ia para o fim)
+export async function extractPdfText(file, onProgress, {columns = true} = {}){
   const doc = await openDoc(file);
   const lines = []; lastText.pages = {};
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const vp = page.getViewport({scale:1});
     const tc = await page.getTextContent();
-    const pl = pageLines(tc.items, vp.width);
+    const pl = pageLines(tc.items, vp.width, columns);
     lastText.pages[p] = pl.join("\n");
     lines.push(...pl);
     onProgress && onProgress(p, doc.numPages);
@@ -64,7 +65,10 @@ export async function extractPdfText(file, onProgress){
 }
 
 /* ---------- interpretação do texto ---------- */
-const QSTART = /^(?:quest[ãa]o|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,3})\s*(?:[.)\-–—:]|\s)\s*(.*)$/i;
+const QSTART = /^(?:quest[ãa]o(?:\s*n[º°o]\.?)?|q\.?)\s*(\d{1,3})\b[\s.:)\-–—]*(.*)$|^(\d{1,3})\s*(?:[.)\-–—:]|\s)\s*(.*)$/i;
+// cabeçalho "QUESTÃO 12": quando a prova numera assim, só ele abre questão (a capa com instruções
+// numeradas "1. O Cartão de Respostas..." e as listas "1." dentro do enunciado não viram questão)
+const QHEAD = /^quest[ãa]o(?:\s*n[º°o]\.?)?\s*\d{1,3}\b/i;
 // "(C)2,6" sem espaço também vale quando a letra está entre parênteses
 const ALT = /^(?:\(([A-Ea-e])\)|\(?([A-Ea-e])\s*[).\-–—]\s)\s*(.*)$/;
 // itens de lista dentro do enunciado: "( ) afirmativa" (V/F), "I.", "II -", "1)"
@@ -72,7 +76,14 @@ const LIST_ITEM = /^(?:\(\s*[VvFf_]?\s*\)|\[\s*\]|[IVX]{1,5}\s*[.\-–—)]\s|\d
 // linha de tabela: separadores "|" ou dois ou mais valores (R$ 300.000,00 · 31/12/24 · 12,5%)
 const TABLE_ROW = l => /\S\s*\|\s*\S/.test(l) || (l.match(/R\$/g) || []).length >= 2 || ((l.match(/\d[\d.,/%]*/g) || []).length >= 2 && (l.match(/\d/g) || []).length / l.length > 0.25);
 // gabarito logo depois da questão: "Gabarito: B", "GABARITO: LETRA C", "Gab. C", "Resposta correta: (B)", "Alternativa correta: letra B"
-const GAB_LINE = /^(?:g[a4]b[a4]r[i1l|!][t7][o0]|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:;,\-–]?\s*\(?(certo|errado|[a-e8])\)?(?![a-zà-ú\d])/i;
+const GAB_RE = /^(?:g[a4]b[a4]r[i1l|!][t7][o0]|gab\.?|resposta(?:\s+correta)?|resp\.|alternativa\s+correta|op[çc][ãa]o\s+correta)\s*(?:oficial|definitivo|preliminar)?(\s*[:\-–.]?\s*(?:[ée]\s+)?(?:a\s+)?(?:letra|alternativa|op[çc][ãa]o|item)?\s*[:;,\-–]?\s*)\(?(certo|errado|anulad[ao]|[a-e8])\)?(?![a-zà-ú\d])/i;
+// sem ":" nem "letra" entre a palavra e a resposta, só vale a resposta sozinha no fim da linha ("Gabarito B"):
+// "pronta resposta a incidentes." é texto do enunciado, não gabarito
+const gabLine = l => {
+  const m = l.match(GAB_RE); if (!m) return null;
+  const ok = /[:\-–.;,]|[ée]\s|letra|alternativa|op[çc]|item/i.test(m[1]) || (/^(?:[A-E8]|certo|errado|anulad[ao])$/i.test(m[2]) && !/^[a-e]$/.test(m[2]) && /^[\s.)\]]*$/.test(l.slice(m[0].length)));
+  return ok ? [m[0], m[2]] : null;
+};
 const BANCA = /^\S{0,6}\s*\((?:FGV|CESPE|CEBRASPE|FCC|VUNESP|IBFC|IDECAN|AOCP|QUADRIX|CESGRANRIO|FUNDATEC|CONSULPLAN|IADES|FEPESE|FUNRIO|IBADE|AVANÇA ?SP|INSTITUTO|SELECON|OBJETIVA|FUMARC|COPS|NC-UFPR|COMPERVE|CETRO|ESAF|FUNCAB|IDIB|ITAME|INSTITUTO AOCP)[\s\/)\-–]/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
 // instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
@@ -84,6 +95,7 @@ function normAnswer(s){
   if (/^certo$|^c$|^v$|^verdadeiro$/i.test(s)) return "C";
   if (/^errado$|^f$|^falso$/i.test(s)) return "E";
   if (/^[a-e]$/i.test(s)) return s.toUpperCase();
+  if (/^anulad[ao]$|^x$|^\*$/i.test(s)) return "X"; // questão anulada
   return null;
 }
 // "1-C 2-A 3 B" ou tabela com uma linha de números e outra de letras
@@ -108,9 +120,50 @@ function parseKey(lines){
 export function parseAnswerKey(text){
   return parseKey(text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean));
 }
+// gabarito com uma versão para cada tipo de prova ("PROVA 1", "TIPO 2 - BRANCA", "Caderno 3"): devolve uma chave
+// por versão, na ordem do arquivo. Sem versões, devolve uma só, com id null.
+const KEY_HEAD = /^(?:gabarito\s+(?:d[ao]\s+)?)?(?:prova|tipo|caderno|vers[ãa]o)\s*(?:tipo\s*)?[:\-–nº°]*\s*(\d{1,2}|[A-H])\b/i;
+export function parseAnswerKeys(text){
+  const lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const secs = []; let cur = {label:"", id:null, lines:[]};
+  for (const l of lines) {
+    const m = l.length <= 40 && l.match(KEY_HEAD);
+    if (m && !/\d\s*[\-–—.:)]\s*[a-e](?![a-zà-ú])/i.test(l.slice(m[0].length))) {
+      secs.push(cur); cur = {label:l.charAt(0).toUpperCase() + l.slice(1).toLowerCase(), id:m[1].toUpperCase(), lines:[]}; continue;
+    }
+    cur.lines.push(l);
+  }
+  secs.push(cur);
+  const keys = secs.map(s => ({label:s.label, id:s.id, key:parseKey(s.lines)})).filter(s => Object.keys(s.key).length >= 5);
+  if (keys.length >= 2 && keys.every(s => s.id) && new Set(keys.map(s => s.id)).size === keys.length) return keys;
+  return [{label:"", id:null, key:parseKey(lines)}];
+}
+// tipo do caderno de questões ("Tipo 1 – Página 2" no rodapé, "PROVA TIPO 3"): o número que mais aparece
+// depois de "tipo", se aparecer bastante e bem mais que os outros
+export function examType(text){
+  const c = {};
+  for (const m of (text || "").matchAll(/\btipo\s*(?:de\s+prova\s*)?[:\-–nº°]*\s*(\d{1,2})\b(?![,.]\d|\s*(?:%|anos?\b|dias?\b|horas?\b))/gi)) c[m[1]] = (c[m[1]] || 0) + 1;
+  const [a, b] = Object.entries(c).sort((x, y) => y[1] - x[1]);
+  return a && a[1] >= 3 && (!b || a[1] >= b[1] * 3) ? a[0] : null;
+}
 
 const SMALL = new Set(["de","da","do","das","dos","e","a","o","em","na","no","para","com"]);
 function titleCase(t){ return t.toLowerCase().split(/\s+/).map((w, i) => i && SMALL.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(" "); }
+// junta as linhas de um texto corrido em parágrafos: quebra depois de linha curta que fecha frase; o rótulo
+// "Texto I", o título em maiúsculas e o autor ou a fonte no fim ficam em linhas próprias
+function joinText(ls){
+  const lens = ls.map(l => l.length).sort((a, b) => a - b), full = lens[Math.floor(lens.length * 0.75)] || 60;
+  const own = s => /^texto\s+\S{1,6}$/i.test(s) || (!/[a-zà-ú]/.test(s) && /[A-ZÀ-Ú]{3}/.test(s));
+  let out = "";
+  ls.forEach((l, k) => {
+    if (!k) { out = l; return; }
+    const p = ls[k - 1];
+    const brk = own(p) || own(l) || (/[.!?:;"”»)\]…]$/.test(p) && p.length < full * 0.85)
+      || (k === ls.length - 1 && l.length < 45 && !/[.!?;,]$/.test(l)) || /^(?:dispon[íi]vel em|fonte:|adaptado|texto adaptado|in:)/i.test(l);
+    out += brk ? "\n" + l : /[a-zà-ú]-$/.test(p) && /^[a-zà-ú]/.test(l) ? l : " " + l;
+  });
+  return out;
+}
 
 /* matéria pelo conteúdo da questão, quando o PDF não traz títulos: palavras típicas de cada disciplina */
 const SUBJECTS = [
@@ -148,17 +201,38 @@ export function guessSubject(text){
 }
 
 export function parseQuestions(text){
-  let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(l => l && !NOISE.test(l));
+  let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  // alternativa que é uma fração montada (numerador em cima, letra no meio, denominador embaixo): "(A) 5/7"
+  for (let i = 1; i < lines.length - 1; i++) {
+    if (/^\(?[A-E]\)$/.test(lines[i]) && /^\d{1,4}$/.test(lines[i - 1]) && /^\d{1,4}$/.test(lines[i + 1])) {
+      lines.splice(i - 1, 3, `${lines[i]} ${lines[i - 1]}/${lines[i + 1]}`); i--;
+    }
+  }
+  lines = lines.filter(l => !NOISE.test(l));
   // cabeçalhos e rodapés que se repetem em várias páginas
   const freq = {}; lines.forEach(l => freq[l] = (freq[l] || 0) + 1);
   // título de matéria: linha curta em maiúsculas que aparece uma vez só ("MATEMÁTICA FINANCEIRA")
   const sectionTitle = l => {
     if (!l || freq[l] > 1) return "";
     const t = l.replace(/^[^A-Za-zÀ-ú]+|[^A-Za-zÀ-ú]+$/g, "");
-    if (t.length < 5 || t.length > 60 || /[a-zà-ú]/.test(t) || !/[A-ZÀ-Ú]{4}/.test(t) || /\d/.test(t) || GAB_LINE.test(t) || COMMENT.test(t) || INSTR.test(t) || /^(?:QUEST[ÕO]ES|GABARITO|COMENT[ÁA]RIOS?|ATEN[ÇC][ÃA]O|INSTRU[ÇC][ÕO]ES)\b/.test(t) || /(?:^|\s)(?:PROVA|SIMULADO|CADERNO|CONCURSO|CARGO|EDITAL|TRIBUNAL|BANCA|APOSTILA)(?:\s|$)|\s[-–—|]\s/.test(t)) return "";
+    if (t.length < 5 || t.length > 60 || /[a-zà-ú]/.test(t) || !/[A-ZÀ-Ú]{4}/.test(t) || /\d/.test(t) || gabLine(t) || COMMENT.test(t) || INSTR.test(t) || /^(?:QUEST[ÕO]ES|GABARITO|COMENT[ÁA]RIOS?|ATEN[ÇC][ÃA]O|INSTRU[ÇC][ÕO]ES)\b/.test(t) || /(?:^|\s)(?:PROVA|SIMULADO|CADERNO|CONCURSO|CARGO|EDITAL|TRIBUNAL|BANCA|APOSTILA)(?:\s|$)|\s[-–—|]\s/.test(t)) return "";
     return titleCase(t);
   };
-  lines = lines.filter(l => !(freq[l] > 1 && l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !BANCA.test(l) && !GAB_LINE.test(l) && !COMMENT.test(l)));
+  // rodapé com o número da página ("Tipo 1 – Página 6"): repete trocando só os números
+  const dnorm = l => l.replace(/\d+/g, "#"), dfreq = {};
+  lines.forEach(l => { if (/\d/.test(l)) dfreq[dnorm(l)] = (dfreq[dnorm(l)] || 0) + 1; });
+  const pageMark = l => l.length <= 60 && /p[áa]g(?:ina|\.)?\s*#/i.test(dnorm(l)) && dfreq[dnorm(l)] >= 3;
+  // linha repetida é cabeçalho ou rodapé quando aparece em boa parte das páginas (o cabeçalho que mais se repete dá
+  // a medida) e com as repetições espalhadas. Frases que se repetem em poucas questões ("Assinale a alternativa
+  // correta:") e linhas iguais em alternativas da mesma questão ("Ferroviária Federal, Polícias Militares, Corpos de") ficam
+  const pos = {}; lines.forEach((l, i) => (pos[l] = pos[l] || []).push(i));
+  const spread = l => pos[l].length > 1 && pos[l].every((p, k) => !k || p - pos[l][k - 1] >= 12);
+  const headLike = l => l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !BANCA.test(l) && !gabLine(l) && !COMMENT.test(l);
+  const maxRep = Math.max(0, ...Object.keys(freq).filter(l => freq[l] > 1 && headLike(l) && spread(l)).map(l => freq[l]));
+  const pages = Math.max(2, Math.ceil(maxRep / 2));
+  // sigla curta no cabeçalho de cada página ("IBADE"); no meio da questão ela cortava o resto da alternativa
+  const shortHead = l => freq[l] >= Math.max(3, pages) && spread(l) && /^[A-ZÀ-Ú]{3,10}$/.test(l) && !/^(?:CERTO|ERRADO|ANULADA|PROVA|TEXTO|QUEST[ÃA]O|GABARITO|ITEM|ITENS|RESPOSTA)$/.test(l);
+  lines = lines.filter(l => !pageMark(l) && !shortHead(l) && !(freq[l] >= pages && spread(l) && headLike(l)));
   // sumário/índice: linhas com pontilhado até o número da página e o bloco logo abaixo do título "Sumário"
   const TOC_LINE = /(?:\.\s?){4,}\s*\d{1,4}$|…+\s*\d{1,4}$|_{4,}\s*\d{1,4}$/;
   const tocKept = []; let inToc = false;
@@ -183,7 +257,7 @@ export function parseQuestions(text){
   const kept = []; let inKey = false;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/^gabaritos?\b/i.test(l) && !GAB_LINE.test(l)) {
+    if (/^gabaritos?\b/i.test(l) && !gabLine(l)) {
       inKey = true; addPairs(l.replace(/^gabaritos?\s*(?:oficial|definitivo|preliminar)?\s*[:\-–]?\s*/i, "")); continue;
     }
     const nums = l.replace(/^(?:ite(?:m|ns)|quest(?:[õo]es|[ãa]o)|n[º°o]\.?)\s*/i, "").split(/\s+/);
@@ -218,6 +292,32 @@ export function parseQuestions(text){
   // "(A)" no meio da linha (comum no OCR): quebra antes de cada alternativa entre parênteses
   lines = lines.flatMap(l => /\S\s+\([A-E]\)\s/.test(l) ? l.split(/\s+(?=\([A-E]\)\s)/) : [l]);
 
+  // prova que numera as questões com "QUESTÃO 12" (o cabeçalho sozinho na linha também vale)
+  const strict = lines.filter(l => QHEAD.test(l)).length >= 5;
+  // textos de apoio: "Leia o Texto I para responder as questões de 1 a 5." O texto vai até a primeira dessas questões
+  // e sai da leitura das questões; depois entra em cada uma delas (sem ele, as de interpretação ficam sem sentido)
+  const SUPPORT_RE = /\btexto\s*([IVX]{1,5}\b|\d{1,2}\b|[A-Z]{1,3}\d[A-Z0-9]{0,4}\b)?.{0,70}?\bquest(?:[õo]es|[ãa]o)\s*(?:de\s+|n[º°os]+\.?\s*)?(\d{1,3})(?:\s*(?:a|à|até|e|-|–)\s*(\d{1,3}))?/i;
+  const support = [], drop = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^(?:leia|texto|considere|observe|analise|com\s+base|utilize|use|baseado)/i.test(lines[i])) continue;
+    let m = lines[i].match(SUPPORT_RE), last = i;
+    if (!m && lines[i + 1] && lines[i].length < 90) { m = (lines[i] + " " + lines[i + 1]).match(SUPPORT_RE); last = i + 1; }
+    if (!m) continue;
+    const from = +m[2], to = +(m[3] || m[2]); if (to < from || to - from > 15) continue;
+    // o texto termina onde começa a primeira questão do intervalo
+    let end = -1;
+    for (let k = last + 1; k < Math.min(lines.length, last + 400); k++) {
+      const q = lines[k].match(QSTART); if (!q || (strict && !QHEAD.test(lines[k]))) continue;
+      if (+(q[1] || q[3]) === from) { end = k; break; }
+      if (strict || q[1]) break; // outra questão no caminho: não é esse formato
+    }
+    if (end < 0 || end - last < 3) continue;
+    support.push({from, to, text:joinText(lines.slice(last + 1, end))});
+    for (let k = last + 1; k < end; k++) drop.add(k);
+    i = end - 1;
+  }
+  if (drop.size) lines = lines.filter((l, i) => !drop.has(i));
+
   // as alternativas vêm logo em seguida (antes de outra questão)?
   const altSoon = i => { for (let k = i + 1; k < Math.min(lines.length, i + 6); k++) { if (ALT.test(lines[k])) return true; if (QSTART.test(lines[k]) || BANCA.test(lines[k])) return false; } return false; };
   // lê as questões a partir de uma linha, exigindo numeração em sequência (1, 2, 3...)
@@ -236,6 +336,7 @@ export function parseQuestions(text){
       // pulo de até 3 números (questão anulada ou número ilegível no meio) só quando a linha tem cara forte de início de questão
       if (!isStart && m && prevNum !== null && num > prevNum + 1 && num <= prevNum + 4 && (banca || m[1])) isStart = true;
       if (!isStart && !m && banca && prevNum !== null && mode !== "front") { isStart = true; }
+      if (strict && isStart && !QHEAD.test(l)) isStart = false;
       if (isStart && !m) {
         close(); prevNum = prevNum + 1; mode = "front";
         if (pend && i - pend.i <= 3) section = pend.t;
@@ -251,20 +352,24 @@ export function parseQuestions(text){
         continue;
       }
       if (!q) continue;
-      const g = l.match(GAB_LINE);
+      const g = gabLine(l);
       if (g) { const a = normAnswer(g[1] === "8" ? "B" : g[1]); // leitura por imagem às vezes troca o B por 8
         if (a) { q.answer = a; mode = "after"; continue; } }
       // títulos de seção em maiúsculas ("DIREITO PENAL") e instruções
       // (no meio do comentário, só pula a linha: costuma ser o cabeçalho da página seguinte)
       const st = sectionTitle(l); if (st) pend = {t:st, i};
       // sobra de tabela lida por imagem: só barras e letras soltas
-      if (mode === "front" && l.replace(/[^A-Za-zÀ-ú0-9]/g, "").length < 2) continue;
+      if (mode === "front" && !ALT.test(l) && l.replace(/[^A-Za-zÀ-ú0-9]/g, "").length < 2 && !/^[a-zà-ú]{1,3}:$/i.test(l)) continue;
       const upper = l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l);
       // no meio do enunciado: cabeçalho de página repetido é só pulado (título de matéria ainda encerra a questão),
       // e "Com base nesses dados, ..." seguido das alternativas continua o enunciado
       const inFront = mode === "front" && q.front;
+      // logo depois de "QUESTÃO 23" sozinho na linha, "Considerando...", "Leia...", "Com base..." já são o enunciado
+      const fresh = mode === "front" && !q.front;
+      if (fresh && upper) continue;
       if (inFront && upper && !st) continue;
-      if (inFront && INSTR.test(l) && !/^texto\s/i.test(l) && !/julg|\bitens?\b|quest(?:[õo]es|[ãa]o)/i.test(l) && altSoon(i)) { /* segue como enunciado */ }
+      if (fresh && INSTR.test(l)) { /* começo do enunciado */ }
+      else if (inFront && INSTR.test(l) && !/^texto\s/i.test(l) && !/julg|\bitens?\b|quest(?:[õo]es|[ãa]o)/i.test(l) && altSoon(i)) { /* segue como enunciado */ }
       else if (INSTR.test(l) || upper) { if (mode !== "comment" && mode !== "after") mode = "skip"; continue; }
       const c = l.match(COMMENT);
       if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }
@@ -288,7 +393,7 @@ export function parseQuestions(text){
   // tenta começar em cada "1" do arquivo e fica com a sequência mais parecida com uma prova
   const starts = [];
   // (títulos de capítulo em maiúsculas, como "1 DIREITO PENAL", não contam como questão 1)
-  lines.forEach((l, i) => { const m = l.match(QSTART); if (m && +(m[1] || m[3]) === 1 && /[a-zà-ú]/.test(m[2] ?? m[4] ?? "")) starts.push(i); });
+  lines.forEach((l, i) => { const m = l.match(QSTART); if (m && +(m[1] || m[3]) === 1 && (strict ? QHEAD.test(l) : /[a-zà-ú]/.test(m[2] ?? m[4] ?? ""))) starts.push(i); });
   let qs = [], best = -1;
   for (const st of starts) { const r = runFrom(st); const sc = score(r); if (sc > 0 && sc >= best) { best = sc; qs = r; } }
   if (best <= 0) qs = runFrom(0, false);
@@ -319,9 +424,12 @@ export function parseQuestions(text){
     const lost = q.options.length < 2 && ((ans && /[ABD]/.test(ans)) || /assinale|alternativa|respectivamente|verdadeira \(V\)|correto o que se afirma|est[áa]\s+corret[ao]\s+(?:o|apenas)/i.test(q.front));
     const isCE = !lost && (q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1])));
     const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment, subject:q.section || guessSubject([q.front, ...q.options, q.comment].join(" "))};
+    const sup = support.find(s => q.num >= s.from && q.num <= s.to);
+    if (sup) { out.support = sup.text; out.supportRange = [sup.from, sup.to]; }
+    if (ans === "X") out.void = true; // anulada no gabarito
     if (isCE) out.answer = ans === "C" || ans === "E" ? ans : null;
     else if (lost) { out.options = ["", "", "", ""]; out.lost = true; const idx = ans ? "ABCD".indexOf(ans) : -1; out.correct = idx >= 0 ? idx : null; }
-    else { out.options = q.options.slice(0, 5); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
+    else { out.options = q.options.slice(0, 5).map(o => o.trim()); const idx = ans ? "ABCDE".indexOf(ans) : -1; out.correct = idx >= 0 && idx < out.options.length ? idx : null; }
     return out;
   });
   // completa pela tabela só de letras. A leitura pode grudar ou perder uma célula, então a tabela é alinhada
@@ -370,7 +478,7 @@ export function cancelOcr(){ ocrCancel = true; if (ocrWorker) { ocrWorker.termin
 // onProgress(página atual, total, fração da página)
 // páginas lidas na última leitura por imagem: texto de cada uma e as que saíram vazias
 export const lastOcr = {pages:{}, empty:[]};
-export async function ocrPdf(file, from, to, onProgress, pageList){
+export async function ocrPdf(file, from, to, onProgress, pageList, {columns = true} = {}){
   ocrCancel = false;
   const doc = await openDoc(file);
   const T = await loadTesseract();
@@ -396,7 +504,7 @@ export async function ocrPdf(file, from, to, onProgress, pageList){
     (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(pa => (pa.lines || []).forEach(l => (l.words || []).forEach(w => {
       if (w.text && w.text.trim()) words.push({str:w.text, width:w.bbox.x1 - w.bbox.x0, transform:[1, 0, 0, w.bbox.y1 - w.bbox.y0, w.bbox.x0, cv.height - w.bbox.y1]});
     }))));
-    return {text:words.length ? pageLines(words, cv.width).join("\n") : (data.text || ""), words:words.length};
+    return {text:words.length ? pageLines(words, cv.width, columns).join("\n") : (data.text || ""), words:words.length};
   };
   const out = [];
   lastOcr.pages = {}; lastOcr.empty = [];

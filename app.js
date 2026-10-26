@@ -1,5 +1,5 @@
 import { firebaseConfig } from "./firebase-config.js";
-import { extractPdfText, parseQuestions, parseAnswerKey, pdfPageCount, ocrPdf, cancelOcr, SUBJECT_NAMES, lastOcr, lastText } from "./pdf-import.js";
+import { extractPdfText, parseQuestions, parseAnswerKeys, examType, pdfPageCount, ocrPdf, cancelOcr, SUBJECT_NAMES, lastOcr, lastText } from "./pdf-import.js";
 import { initializeApp } from "./vendor/firebase/firebase-app.js";
 import { getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from "./vendor/firebase/firebase-auth.js";
 import { initializeFirestore, connectFirestoreEmulator, persistentLocalCache, persistentMultipleTabManager, doc, collection, setDoc, deleteDoc, updateDoc, getDoc, onSnapshot, query, where, arrayUnion, arrayRemove, deleteField, waitForPendingWrites, terminate, clearIndexedDbPersistence } from "./vendor/firebase/firebase-firestore.js";
@@ -1105,30 +1105,63 @@ async function resolveDeck(prefix, fallbackName){
 /* importar PDF */
 // [1,2,3,7,9,10] → "1–3, 7, 9–10"
 function ranges(ns){ const a = [...ns].sort((x, y) => x - y), out = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return out.join(", "); }
-const APP_VERSION = "26"; // acompanhar o número do cache em sw.js
-// lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
-async function applyKeyFile(f, items, msg){
+const APP_VERSION = "27"; // acompanhar o número do cache em sw.js
+// lê o PDF do gabarito (com leitura por imagem se for escaneado); pode ter várias versões (Prova 1, Prova 2…)
+async function readKeyFile(f, msg){
   msg.textContent = "Lendo o gabarito…";
-  let text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo o gabarito: página ${p} de ${n}…`; });
+  // sem separar colunas: a tabela do gabarito costuma ocupar a página inteira
+  let text = await extractPdfText(f, (p, n) => { msg.textContent = `Lendo o gabarito: página ${p} de ${n}…`; }, {columns:false});
   if (text.replace(/\s/g, "").length < 20) {
     const n = Math.min(await pdfPageCount(f), 8);
-    text = await ocrPdf(f, 1, n, (cur, tot, fr) => { msg.textContent = `Gabarito escaneado: lendo página ${cur} de ${tot}… ${Math.round(((cur - 1) + fr) / tot * 100)}%`; });
+    text = await ocrPdf(f, 1, n, (cur, tot, fr) => { msg.textContent = `Gabarito escaneado: lendo página ${cur} de ${tot}… ${Math.round(((cur - 1) + fr) / tot * 100)}%`; }, null, {columns:false});
   }
-  const key = parseAnswerKey(text); let n = 0;
+  return parseAnswerKeys(text);
+}
+// preenche as respostas pelo número da questão; "X" = anulada (fica sem resposta e desmarcada)
+function applyKey(key, items){
+  if (!view.keyBase || view.keyBase.items !== items) view.keyBase = {items, saved:items.map(q => ({correct:q.correct, answer:q.answer, void:q.void}))};
+  items.forEach((q, i) => Object.assign(q, view.keyBase.saved[i]));
+  let n = 0, voided = 0;
   items.forEach(q => {
     const a = key[q.num]; if (!a) return;
-    if (q.type === "mc") { const k = "ABCDE".indexOf(a); if (k >= 0 && k < q.options.length) { q.correct = k; n++; } }
-    else if (a === "C" || a === "E") { q.answer = a; n++; }
+    if (a === "X") { q.void = true; delete q.correct; delete q.answer; voided++; return; }
+    if (q.type === "mc") { const k = "ABCDE".indexOf(a); if (k >= 0 && k < q.options.length) { q.correct = k; q.void = false; n++; } }
+    else if (a === "C" || a === "E") { q.answer = a; q.void = false; n++; }
   });
-  return n;
+  return {n, voided};
+}
+// escolhe a versão do gabarito pelo tipo do caderno; sem tipo, quem escolhe é a pessoa
+function useKeySet(idx, items){
+  const sets = view.keySets, name = view.keyName;
+  view.keyIdx = idx;
+  if (idx == null) { view.keyNote = {ok:false, text:`O gabarito ${name} tem ${sets.length} versões (${sets.map(s => s.label).join(", ")}). Escolha abaixo a do seu caderno.`}; return; }
+  const {n, voided} = applyKey(sets[idx].key, items), label = sets[idx].label ? ` (${sets[idx].label})` : "";
+  view.keyNote = n || voided ? {ok:true, text:`Gabarito de ${name}${label} aplicado em ${n} de ${items.length} questões.` + (voided ? ` ${voided} ${voided === 1 ? "foi anulada" : "foram anuladas"}.` : "")} : {ok:false, text:`Não encontrei no arquivo ${name}${label} respostas com os números dessas questões.`};
+}
+async function loadKeyFile(f, items, msg){
+  view.keySets = await readKeyFile(f, msg); view.keyName = f.name; view.keyBase = null;
+  const sets = view.keySets;
+  let idx = sets.length === 1 ? 0 : sets.findIndex(s => s.id === view.examType);
+  useKeySet(idx < 0 ? null : idx, items);
 }
 async function finishPdf(items, name, msg, text){
-  view.keyNote = null; view.rawText = text || "";
+  view.keyNote = null; view.keySets = null; view.keyBase = null; view.rawText = text || ""; view.examType = examType(text || "");
   if (view.keyFile) {
-    try { const n = await applyKeyFile(view.keyFile, items, msg); view.keyNote = n ? {ok:true, text:`Gabarito de ${view.keyFile.name} aplicado em ${n} de ${items.length} questões.`} : {ok:false, text:`Não encontrei no arquivo ${view.keyFile.name} respostas com os números dessas questões.`}; }
+    try { await loadKeyFile(view.keyFile, items, msg); }
     catch(err){ console.error(err); view.keyNote = {ok:false, text:`Não consegui ler o gabarito ${view.keyFile.name}.`}; }
   }
   view.items = items; view.file = name; renderPdf();
+}
+// guarda o que já foi editado na conferência antes de redesenhar
+function keepPdfEdits(){
+  const sp = document.getElementById("pdf-split"); if (sp) view.split = sp.checked;
+  view.items.forEach((q, i) => {
+    const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value;
+    const c2 = document.getElementById("pdf-c" + i); if (c2) q.comment = c2.value;
+    const s2 = document.getElementById("pdf-s" + i); if (s2) q.subject = s2.value.trim();
+    const t2 = document.getElementById("pdf-t" + i); if (t2) q.support = t2.value;
+    if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o);
+  });
 }
 function renderPdf(){
   const decks = Object.values(S.decks).sort((a,b) => (a.created||0) - (b.created||0));
@@ -1145,6 +1178,7 @@ function renderPdf(){
       <details><summary class="small" style="cursor:pointer;font-weight:700">Que tipo de PDF funciona?</summary><div class="stack small muted" style="gap:6px;margin-top:8px">
         <p>Questões numeradas (1., 1), Questão 1 ou 51 no estilo Cebraspe), com alternativas (A) a (E) ou itens de certo/errado.</p>
         <p>O gabarito pode vir num PDF separado (escolha no passo 2) ou estar em qualquer parte da própria prova, nas primeiras páginas ou no fim (1-C 2-A ou em tabela), ou logo depois de cada questão ("Gabarito: B", "Resposta: Certo"). Ele é ligado sozinho a cada questão pelo número. Comentários depois de "Comentário:" também entram.</p>
+        <p>Gabarito com uma versão para cada tipo de caderno (Prova 1, Prova 2…): o Fichário usa a do tipo que está na prova e deixa desmarcadas as questões anuladas. Textos de apoio ("Leia o texto para responder às questões 1 a 5") vão junto no começo de cada questão.</p>
         <p>PDF escaneado (foto da página) também funciona: o Fichário lê as páginas como imagem. É mais lento, então você escolhe quais páginas ler. Questões sem gabarito aparecem para você marcar a resposta.</p></div></details>
       <div id="ocr-box" hidden></div>
       <p class="hint" style="text-align:right">Versão ${APP_VERSION}</p>
@@ -1179,7 +1213,9 @@ function renderPdf(){
   }
   const it = view.items;
   const nMc = it.filter(q => q.type === "mc").length, nCe = it.length - nMc;
-  const noKey = it.filter(q => (q.type === "mc" ? q.correct == null : !q.answer)).length;
+  const voidN = it.filter(q => q.void).length;
+  const noKey = it.filter(q => !q.void && (q.type === "mc" ? q.correct == null : !q.answer)).length;
+  const sets = view.keySets?.length > 1 ? view.keySets : null, autoSet = sets && view.keyIdx != null && sets[view.keyIdx].id === view.examType;
   const deckName = S.decks[view.deck]?.name || "";
   const isSharedDeck = !!S.decks[view.deck]?.shared;
   const subjCount = Object.entries(it.reduce((m, q) => { if (q.subject) m[q.subject] = (m[q.subject] || 0) + 1; return m; }, {}));
@@ -1187,6 +1223,8 @@ function renderPdf(){
   $app.innerHTML = top + `<datalist id="pdf-subjects">${subjList.map(n => `<option value="${esc(n)}">`).join("")}</datalist><section class="panel stack" style="padding:16px;margin-bottom:14px;gap:8px">
       <p><b>${it.length} questões encontradas</b> em ${esc(view.file)}: ${nMc} de múltipla escolha e ${nCe} de certo ou errado.</p>
       ${view.keyNote ? `<p class="small" style="color:${view.keyNote.ok ? "var(--good)" : "var(--warn)"}"><b>${view.keyNote.ok ? "✓ " : ""}${esc(view.keyNote.text)}</b></p>` : ""}
+      ${sets ? `<div class="stack" style="gap:6px">${autoSet ? `<p class="small muted">O caderno é do tipo ${esc(view.examType)}, então usei a ${esc(sets[view.keyIdx].label)}. Se não for, troque:</p>` : view.keyIdx == null ? "" : `<p class="small muted">Versão do gabarito em uso:</p>`}<div class="row" style="gap:6px">${sets.map((g, k) => `<button class="btn small ${view.keyIdx === k ? "primary" : "ghost"}" data-act="pdfkeyset" data-v="${k}" aria-pressed="${view.keyIdx === k}">${esc(g.label)}</button>`).join("")}</div></div>` : ""}
+      ${voidN ? `<p class="small muted">${voidN} ${voidN === 1 ? "questão foi anulada" : "questões foram anuladas"} no gabarito oficial e ${voidN === 1 ? "ficou desmarcada" : "ficaram desmarcadas"}. Se quiser estudar mesmo assim, escolha uma resposta.</p>` : ""}
       ${(() => { const nums = new Set(it.map(q => q.num)); const top = Math.max(it.expected || 0, ...it.map(q => q.num)); const miss = []; for (let k = Math.min(...it.map(q => q.num)); k <= top; k++) if (!nums.has(k)) miss.push(k);
         return miss.length ? `<p class="small" style="color:var(--warn)"><b>Faltaram ${miss.length} ${miss.length === 1 ? "questão" : "questões"}:</b> ${esc(ranges(miss))}.${view.badPages?.length ? "" : " Elas podem estar numa página que não foi lida."}</p>` : ""; })()}
       ${view.badPages?.length ? `<div class="stack" style="gap:6px"><p class="small" style="color:var(--warn)">${view.badPages.length === 1 ? "A página" : "As páginas"} ${esc(ranges(view.badPages))} ${view.badPages.length === 1 ? "ficou" : "ficaram"} sem texto lido.</p><div class="row"><button class="btn small" id="pdf-reread" type="button">Ler ${view.badPages.length === 1 ? "essa página" : "essas páginas"} de novo</button></div><p id="pdf-rereadmsg" class="small muted" aria-live="polite"></p></div>` : ""}
@@ -1197,13 +1235,15 @@ function renderPdf(){
       <p id="pdf-keymsg" class="small muted" aria-live="polite"></p>
     </section>
     <div class="stack" style="gap:10px">${it.map((q, i) => {
-      const has = !q.lost && (q.type === "mc" ? q.correct != null : !!q.answer);
+      const has = !q.lost && !q.void && (q.type === "mc" ? q.correct != null : !!q.answer);
       const gab = q.type === "mc"
         ? `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option>${q.options.map((_, k) => `<option value="${k}" ${q.correct === k ? "selected" : ""}>${"ABCDE"[k]}</option>`).join("")}</select>`
         : `<select class="txt pdf-g" id="pdf-g${i}" data-i="${i}" style="width:auto"><option value="">Gabarito?</option><option value="C" ${q.answer === "C" ? "selected" : ""}>Certo</option><option value="E" ${q.answer === "E" ? "selected" : ""}>Errado</option></select>`;
       return `<article class="panel stack" style="padding:12px 14px;gap:8px">
         <div class="row spread"><label class="row" style="gap:8px;font-weight:700"><input type="checkbox" class="pdf-inc" id="pdf-inc${i}" data-i="${i}" ${has ? "checked" : ""}> Questão ${q.num} <span class="tchip">${TSHORT[q.type]}</span></label>${gab}</div>
         <div class="row small" style="gap:8px"><label for="pdf-s${i}" class="muted">Matéria</label><input class="txt pdf-s" id="pdf-s${i}" list="pdf-subjects" value="${esc(q.subject || "")}" placeholder="Sem matéria (fica no baralho principal)" style="flex:1;min-width:0;padding:6px 10px"></div>
+        ${q.void ? `<p class="small" style="margin:0;color:var(--warn)"><b>Anulada no gabarito oficial.</b></p>` : ""}
+        ${q.support != null ? `<details><summary class="small" style="cursor:pointer;font-weight:700">Texto de apoio${q.supportRange ? ` · questões ${q.supportRange[0]}${q.supportRange[1] !== q.supportRange[0] ? ` a ${q.supportRange[1]}` : ""}` : ""}</summary><p class="hint" style="margin-top:6px">Vai junto no começo da carta.</p><textarea class="txt" id="pdf-t${i}" rows="8" style="margin-top:6px">${esc(q.support)}</textarea></details>` : ""}
         ${q.lost ? `<p class="banner" style="margin:0">Não achei as alternativas desta questão no PDF. Digite abaixo ou deixe desmarcada.</p>` : ""}
         <textarea class="txt typed-in" id="pdf-f${i}" rows="${Math.min(10, Math.max(3, (q.front.match(/\n/g) || []).length + 2))}" style="margin:0">${esc(q.front)}</textarea>
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
@@ -1235,9 +1275,9 @@ function renderPdf(){
   const kf = document.getElementById("pdf-keyfile");
   if (kf) kf.onchange = async e => {
     const f = e.target.files[0]; if (!f) return; const msg = document.getElementById("pdf-keymsg");
-    // guarda o que já foi editado antes de redesenhar
-    view.items.forEach((q, i) => { const f2 = document.getElementById("pdf-f" + i); if (f2) q.front = f2.value; const c2 = document.getElementById("pdf-c" + i); if (c2) q.comment = c2.value; const s2 = document.getElementById("pdf-s" + i); if (s2) q.subject = s2.value.trim(); const sp = document.getElementById("pdf-split"); if (sp) view.split = sp.checked; if (q.options) q.options = q.options.map((o, k) => document.getElementById(`pdf-o${i}-${k}`)?.value ?? o); });
-    try { const n = await applyKeyFile(f, view.items, msg); if (!n) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; return; } view.keyNote = {ok:true, text:`Gabarito de ${f.name} aplicado em ${n} de ${view.items.length} questões.`}; renderPdf(); }
+    keepPdfEdits();
+    const before = {sets:view.keySets, name:view.keyName, base:view.keyBase, idx:view.keyIdx, note:view.keyNote};
+    try { await loadKeyFile(f, view.items, msg); if (!view.keyNote.ok && view.keyIdx != null) { msg.innerHTML = `<span class="err">Não encontrei respostas para essas questões nesse PDF.</span>`; Object.assign(view, {keySets:before.sets, keyName:before.name, keyBase:before.base, keyIdx:before.idx, keyNote:before.note}); return; } renderPdf(); }
     catch(err){ console.error(err); msg.innerHTML = `<span class="err">Não consegui ler esse PDF.</span>`; }
   };
   pdfCount();
@@ -1249,7 +1289,8 @@ async function pdfImport(){
   it.forEach((q, i) => {
     if (!document.getElementById("pdf-inc" + i).checked) return;
     const g = document.getElementById("pdf-g" + i).value;
-    const front = esc(document.getElementById("pdf-f" + i).value.trim()).replace(/\n/g, "<br>");
+    const sup = (document.getElementById("pdf-t" + i)?.value ?? q.support ?? "").trim();
+    const front = (sup ? esc(sup).replace(/\n/g, "<br>") + "<br><br>" : "") + esc(document.getElementById("pdf-f" + i).value.trim()).replace(/\n/g, "<br>");
     if (g === "") { missing.push(q.num); return; }
     const cm = (document.getElementById("pdf-c" + i)?.value ?? q.comment ?? "").trim();
     const c = {deck, type:q.type, front, comment:cm ? esc(cm).replace(/\n/g, "<br>") : "", tags:[], subject:(document.getElementById("pdf-s" + i)?.value || "").trim()};
@@ -1321,6 +1362,7 @@ $app.addEventListener("click", e => {
     case "pdf": go("pdf", {deck:id || ""}); break;
     case "pdfagain": go("pdf", {deck:view.deck}); break;
     case "pdfimport": pdfImport(); break;
+    case "pdfkeyset": keepPdfEdits(); useKeySet(+b.dataset.v, view.items); renderPdf(); break;
     case "pdfall": document.querySelectorAll(".pdf-inc").forEach(c => c.checked = b.dataset.v === "1"); pdfCount(); break;
     case "open": go("deck", {id}); break;
     case "study": startStudy(id); break;
