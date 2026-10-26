@@ -78,7 +78,7 @@ const GAB_LINE = /^(?:g[a4]b[a4]r[i1l|!][t7][o0]|gab\.?|resposta(?:\s+correta)?|
 const BANCA = /^\S{0,6}\s*\((?:FGV|CESPE|CEBRASPE|FCC|VUNESP|IBFC|IDECAN|AOCP|QUADRIX|CESGRANRIO|FUNDATEC|CONSULPLAN|IADES|FEPESE|FUNRIO|IBADE|AVANÇA ?SP|INSTITUTO|SELECON|OBJETIVA|FUMARC|COPS|NC-UFPR|COMPERVE|CETRO|ESAF|FUNCAB|IDIB|ITAME|INSTITUTO AOCP)[\s\/)\-–]/i;
 const COMMENT = /^(?:coment[áa]rios?|justificativa|fundamenta[çc][ãa]o|explica[çc][ãa]o)\s*[:\-–]?\s*(.*)$/i;
 // instruções e textos de apoio entre questões ("Julgue os itens...", "Texto CB1A1") não entram no enunciado anterior
-const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;
+const INSTR = /^(?:texto\s+(?:[A-Z]{1,3}\d|\d{1,2}[A-Z]{1,3}\d|para|associado|i+\b)|julgue\s|considerando\s|com\s+(?:base|rela[çc][ãa]o)\s|acerca\s|a\s+respeito\s|no\s+que\s+se\s+refere|em\s+rela[çc][ãa]o\s|tendo\s+em\s+vista|leia\s|observe\s|(?:conhecimentos|parte)\s+(?:b[áa]sicos|espec[íi]ficos|gerais|[IVX]+)\b|caderno\s|cargo\s)/i;
 const NOISE = /^(?:p[áa]gina\s*\d+(\s*de\s*\d+)?|\d{1,3}|www\.\S+|-\s*\d+\s*-)$/i;
 
 function normAnswer(s){
@@ -220,6 +220,8 @@ export function parseQuestions(text){
   // "(A)" no meio da linha (comum no OCR): quebra antes de cada alternativa entre parênteses
   lines = lines.flatMap(l => /\S\s+\([A-E]\)\s/.test(l) ? l.split(/\s+(?=\([A-E]\)\s)/) : [l]);
 
+  // as alternativas vêm logo em seguida (antes de outra questão)?
+  const altSoon = i => { for (let k = i + 1; k < Math.min(lines.length, i + 6); k++) { if (ALT.test(lines[k])) return true; if (QSTART.test(lines[k]) || BANCA.test(lines[k])) return false; } return false; };
   // lê as questões a partir de uma linha, exigindo numeração em sequência (1, 2, 3...)
   const runFrom = (start, forced = true, end = lines.length) => {
     const qs = []; let q = null, mode = "front", prevNum = null, section = "", pend = null;
@@ -260,8 +262,11 @@ export function parseQuestions(text){
       // sobra de tabela lida por imagem: só barras e letras soltas
       if (mode === "front" && l.replace(/[^A-Za-zÀ-ú0-9]/g, "").length < 2) continue;
       const upper = l.length < 70 && /[A-ZÀ-Ú]{3}/.test(l) && !/[a-zà-ú]/.test(l) && !ALT.test(l);
-      // no meio do enunciado, cabeçalho de página é só pulado; "Com base nesses dados, ..." continua o enunciado
-      if (mode === "front" && q.front && (upper || (INSTR.test(l) && !/julg|\bitens?\b|quest(?:[õo]es|[ãa]o)/i.test(l)))) { if (upper) continue; }
+      // no meio do enunciado: cabeçalho de página repetido é só pulado (título de matéria ainda encerra a questão),
+      // e "Com base nesses dados, ..." seguido das alternativas continua o enunciado
+      const inFront = mode === "front" && q.front;
+      if (inFront && upper && !st) continue;
+      if (inFront && INSTR.test(l) && !/^texto\s/i.test(l) && !/julg|\bitens?\b|quest(?:[õo]es|[ãa]o)/i.test(l) && altSoon(i)) { /* segue como enunciado */ }
       else if (INSTR.test(l) || upper) { if (mode !== "comment" && mode !== "after") mode = "skip"; continue; }
       const c = l.match(COMMENT);
       if (c) { mode = "comment"; q.comment = (c[1] || "").trim(); continue; }

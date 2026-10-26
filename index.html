@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Fichário de Concurso</title>
 <meta name="description" content="Flashcards para concurso: certo ou errado, múltipla escolha, lacunas e revisão espaçada.">
-<meta name="theme-color" content="#1d5c88">
+<meta name="theme-color" content="#1d5c88" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f151a" media="(prefers-color-scheme: dark)">
 <script>try{var t=localStorage.getItem("fich-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -111,7 +112,8 @@ button{cursor:pointer}
 @media (max-width:520px){.seg{grid-template-columns:1fr 1fr}.seg button:nth-child(3){border-left:0}.seg button:nth-child(n+3){border-top:1px solid var(--line)}}
 .rich{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
 .tb{display:flex;flex-wrap:wrap;gap:2px;padding:4px;border-bottom:1px solid var(--line);background:var(--sunk)}
-.tb button{border:0;background:none;min-width:34px;height:32px;border-radius:6px;font-weight:700;color:var(--ink)}
+.tb button{border:0;background:none;min-width:30px;height:32px;padding:0 3px;border-radius:6px;font-weight:700;color:var(--ink)}
+@media (max-width:420px){.tb .sep{display:none}.tb{gap:1px}}
 .tb button:hover{background:var(--surface)}
 .tb .sep{width:1px;background:var(--line);margin:4px 3px}
 .ed{min-height:84px;padding:10px 12px;outline:none;overflow-wrap:anywhere}
@@ -143,8 +145,13 @@ label.deck{cursor:pointer}
 .welcome{padding:18px;margin-bottom:16px;border-left:4px solid var(--accent)}
 .welcome h2{margin:0 0 8px;font-size:1.2rem}
 .welcome ol{margin:0 0 14px;padding-left:20px;display:flex;flex-direction:column;gap:6px}
-.stats.wide{display:flex;flex-wrap:wrap;max-width:none;margin:12px 0 16px}
-.stats.wide .stat{text-align:center;flex:1 1 88px}
+.stats.wide{max-width:none;margin:12px 0 16px}
+.stats.wide .stat{text-align:center}
+.stats.n4{grid-template-columns:repeat(2,1fr)}
+.stats.n5{grid-template-columns:repeat(6,1fr)}
+.stats.n5 .stat:nth-child(-n+3){grid-column:span 2}
+.stats.n5 .stat:nth-child(n+4){grid-column:span 3}
+@media (min-width:560px){.stats.n4{grid-template-columns:repeat(4,1fr)}.stats.n5{grid-template-columns:repeat(5,1fr)}.stats.n5 .stat:nth-child(n){grid-column:auto}}
 .stable{padding:4px 0;overflow:hidden}
 .srow{display:grid;grid-template-columns:minmax(0,1fr) 64px 44px 40px 48px;gap:8px;align-items:center;padding:9px 12px;border-top:1px solid var(--line)}
 .srow:first-child{border-top:0}
@@ -255,8 +262,7 @@ pre.fmt{background:var(--sunk);border-radius:8px;padding:10px 12px;overflow-x:au
 .back{margin:-4px 0 8px -10px}
 /* barra de ações: botões do mesmo tamanho lado a lado */
 .actions{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
-.actions .btn{padding-left:6px;padding-right:6px;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.actions .btn{padding:8px 10px}
+.actions .btn{padding:8px 10px;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .list-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:18px 0 8px;min-height:32px}
 .btn.small{min-height:32px;padding:4px 10px;font-size:.85rem}
 .selbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:var(--sunk);border-radius:8px;padding:6px 8px 6px 12px;margin-bottom:8px}
@@ -332,6 +338,27 @@ function clean(html){
   return root.innerHTML.trim();
 }
 const isBlank = html => !plain(html) && !/<img/i.test(html || "");
+// texto sem "<" não tem marcação nenhuma: não precisa passar pelo limpador
+const cleanStr = v => { const t = typeof v === "string" ? v : v == null ? "" : String(v); return t.includes("<") ? clean(t) : t; };
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/, SAFE_CODE = /^[A-Za-z0-9]{10,40}$/, SAFE_COLOR = /^#[0-9A-Fa-f]{3,8}$/;
+// carta de baralho compartilhado: qualquer membro escreve nela, então o formato e o HTML são conferidos aqui
+function safeSharedCard(id, c){
+  if (!SAFE_ID.test(id) || !c || typeof c !== "object") return null;
+  const out = {};
+  out.type = ["basic","ce","mc","cloze"].includes(c.type) ? c.type : "basic";
+  out.front = cleanStr(c.front); out.comment = cleanStr(c.comment);
+  if (out.type === "basic") out.back = cleanStr(c.back);
+  if (out.type === "ce") out.answer = c.answer === "E" ? "E" : "C";
+  if (out.type === "mc") {
+    out.options = Array.isArray(c.options) ? c.options.slice(0, 5).map(o => typeof o === "string" ? o : String(o ?? "")) : [];
+    out.correct = Number.isInteger(c.correct) && c.correct >= 0 && c.correct < out.options.length ? c.correct : 0;
+    if (out.options.length < 2) { out.type = "basic"; out.back = ""; delete out.options; delete out.correct; }
+  }
+  out.tags = Array.isArray(c.tags) ? c.tags.slice(0, 30).map(t => String(t ?? "")) : [];
+  out.created = +c.created || 0;
+  if (typeof c.by === "string") out.by = c.by;
+  return out;
+}
 
 /* ---------- agenda de revisão (estilo Anki/SM-2) ---------- */
 function schedule(c, g){
@@ -374,7 +401,7 @@ const store = (() => {
   const strip = o => JSON.parse(JSON.stringify(o)); // remove undefined
   function rebuild(){
     const decks = {...personalDecks};
-    Object.values(shared).forEach(d => decks["s:" + d.id] = {...d, id:"s:" + d.id, sid:d.id, shared:true});
+    Object.values(shared).forEach(d => decks["s:" + d.id] = {...d, id:"s:" + d.id, sid:d.id, shared:true, name:String(d.name ?? "").slice(0, 200), color:SAFE_COLOR.test(d.color) ? d.color : COLORS[0], names:d.names && typeof d.names === "object" ? d.names : {}});
     const cards = {...personalCards};
     Object.entries(sharedCards).forEach(([sid, cs]) => Object.values(cs).forEach(c => { const id = "s:" + sid + ":" + c.id; const pg = progress[sid + "_" + c.id] || {}; cards[id] = {reps:0, ivl:0, ease:2.5, due:0, ...c, ...pg, id, deck:"s:" + sid, shared:true}; }));
     S.decks = decks; S.cards = cards;
@@ -385,11 +412,18 @@ const store = (() => {
     list.forEach(d => watchCards(d.id, 0));
   }
   function watchCards(sid, tries){
-    if (sharedUnsubs[sid]) return;
-    sharedUnsubs[sid] = onSnapshot(collection(db, "sharedDecks", sid, "cards"), q => { const o = {}; q.docs.forEach(x => o[x.id] = {...x.data(), id:x.id}); sharedCards[sid] = o; rebuild(); refresh(); }, e => {
-      // logo depois de entrar com o código, a permissão pode levar um instante para valer
+    if (sharedUnsubs[sid] || !shared[sid]) return;
+    let first = true;
+    // só as cartas que mudaram passam de novo pela conferência
+    sharedUnsubs[sid] = onSnapshot(collection(db, "sharedDecks", sid, "cards"), q => {
+      const o = first ? {} : {...(sharedCards[sid] || {})}; first = false;
+      q.docChanges().forEach(ch => { const id = ch.doc.id; const c = ch.type === "removed" ? null : safeSharedCard(id, ch.doc.data()); if (c) o[id] = {...c, id}; else delete o[id]; });
+      sharedCards[sid] = o; rebuild(); refresh();
+    }, e => {
       delete sharedUnsubs[sid];
-      if (e.code === "permission-denied" && tries < 5 && shared[sid]) setTimeout(() => watchCards(sid, tries + 1), 800 * (tries + 1)); else onErr(e);
+      if (!shared[sid]) return; // saiu do baralho ou ele foi apagado pelo dono
+      // logo depois de entrar com o código, a permissão pode levar um instante para valer
+      if (e.code === "permission-denied" && tries < 5) setTimeout(() => watchCards(sid, tries + 1), 800 * (tries + 1)); else onErr(e);
     });
   }
   return {
@@ -412,7 +446,7 @@ const store = (() => {
         unsubs.push(onSnapshot(ucol("decks"), once(q => { const o = {}; q.docs.forEach(d => o[d.id] = {...d.data(), id:d.id}); personalDecks = o; rebuild(); }), onErr));
         unsubs.push(onSnapshot(ucol("cards"), once(q => { const o = {}; q.docs.forEach(d => o[d.id] = {...d.data(), id:d.id}); personalCards = o; rebuild(); }), onErr));
         unsubs.push(onSnapshot(ucol("progress"), once(q => { const o = {}; q.docs.forEach(d => o[d.id] = d.data()); progress = o; rebuild(); }), onErr));
-        unsubs.push(onSnapshot(query(collection(db, "sharedDecks"), where("members", "array-contains", me.uid)), once(q => { Object.keys(shared).forEach(k => delete shared[k]); q.docs.forEach(d => shared[d.id] = {...d.data(), id:d.id}); watchShared(Object.values(shared)); rebuild(); }), onErr));
+        unsubs.push(onSnapshot(query(collection(db, "sharedDecks"), where("members", "array-contains", me.uid)), once(q => { Object.keys(shared).forEach(k => delete shared[k]); q.docs.forEach(d => { if (SAFE_CODE.test(d.id)) shared[d.id] = {...d.data(), id:d.id}; }); watchShared(Object.values(shared)); rebuild(); }), onErr));
         setTimeout(resolve, 8000);
       });
     },
@@ -469,7 +503,34 @@ const store = (() => {
   };
 })();
 function onErr(e){ console.error(e); if (e && e.code === "permission-denied") toast("Sem permissão para ler parte dos dados."); }
-function refresh(){ if (["home","deck","io"].includes(view.name) || (view.name === "pdf" && !view.items && !view.busy)) render(); }
+// dados novos chegaram (de outro aparelho ou de quem divide o baralho): redesenha sem perder o que a pessoa está fazendo
+let refreshLater = null;
+function refresh(){
+  if (!(["home","deck","io","stats","prefs"].includes(view.name) || (view.name === "pdf" && !view.items && !view.busy))) return;
+  const a = document.activeElement;
+  const typing = a && a !== document.body && $app.contains(a) && a.matches("input:not([type=checkbox]):not([type=radio]),textarea,select,[contenteditable]");
+  const files = [...$app.querySelectorAll("input[type=file]")].some(i => i.files && i.files.length) || (view.pick && (view.pick.prova || view.pick.gab));
+  // digitando, com arquivo escolhido ou com uma confirmação aberta: espera um pouco
+  if (typing || files || $app.querySelector(".confirm")) { clearTimeout(refreshLater); refreshLater = setTimeout(refresh, 1500); return; }
+  const keep = formState(); render(); restoreFormState(keep);
+}
+function formState(){
+  const vals = {};
+  $app.querySelectorAll("input[id],textarea[id],select[id]").forEach(el => {
+    if (el.type === "file") return;
+    if (el.type === "checkbox" || el.type === "radio") { if (el.checked !== el.defaultChecked) vals[el.id] = {checked:el.checked}; }
+    else if (el.tagName === "SELECT" ? [...el.options].some(o => o.selected !== o.defaultSelected) : el.value !== el.defaultValue) vals[el.id] = {value:el.value};
+  });
+  const shown = [...$app.querySelectorAll("[id]")].filter(el => el.hasAttribute("hidden") === false && el.matches("form,.panel,.stack,div")).map(el => el.id);
+  const open = [...$app.querySelectorAll("details")].map(d => d.open);
+  return {vals, shown, open, y:window.scrollY};
+}
+function restoreFormState(k){
+  Object.entries(k.vals).forEach(([id, v]) => { const el = document.getElementById(id); if (!el) return; if ("checked" in v) el.checked = v.checked; else { el.value = v.value; if (el.tagName === "SELECT") el.dispatchEvent(new Event("change")); } });
+  k.shown.forEach(id => { const el = document.getElementById(id); if (el && el.hidden) el.hidden = false; });
+  const ds = [...$app.querySelectorAll("details")]; if (ds.length === k.open.length) ds.forEach((d, i) => d.open = k.open[i]);
+  if (Math.abs(window.scrollY - k.y) > 2) window.scrollTo(0, k.y);
+}
 
 /* ---------- exemplos na primeira abertura ---------- */
 async function seedExamples(){
@@ -595,7 +656,7 @@ function renderHome(){
     <section class="today" aria-label="Resumo do dia">
       <div class="first"><span class="label">Para hoje</span>
         <div class="row spread"><span class="big num">${toStudy}</span><button class="btn primary" data-act="studyall" ${toStudy ? "" : "disabled"}>Estudar tudo</button></div>
-        <span class="small muted num">${all.due} para revisar · ${Math.min(all.nw, newLeft())} novas${all.nw && !newLeft() ? ` (as ${newPerDay()} novas de hoje já foram)` : ""}</span></div>
+        <span class="small muted num">${all.due} para revisar · ${Math.min(all.nw, newLeft())} novas${all.nw && !newLeft() ? (newPerDay() ? ` (as ${newPerDay()} novas de hoje já foram)` : " (novas desligadas nas Preferências)") : ""}</span></div>
       <div><span class="label">Sequência</span><span class="big num">${st}</span><span class="small muted">${st === 1 ? "dia seguido" : "dias seguidos"}</span></div>
       <div><span class="label">Acerto 7 dias</span><span class="big num">${ac === null ? "–" : ac + "%"}</span><span class="small muted num">${all.total} cartas no total</span></div>
     </section>
@@ -801,14 +862,14 @@ function saveCard(another){
 
 /* revisão */
 function buildQueue(deckId){
-  const cs = deckCards(deckId);
+  const cs = deckCards(deckId).filter(c => c.type !== "mc" || (c.options || []).length >= 2);
   const due = cs.filter(isDue).sort((a,b) => a.due - b.due);
   const nw = cs.filter(isNew).sort((a,b) => (a.created||0) - (b.created||0)).slice(0, newLeft());
   const q = [...due, ...nw].map(c => c.id);
   for (let i = q.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i+1)); [q[i], q[j]] = [q[j], q[i]]; }
   return q;
 }
-function startStudy(deckId){ const q = buildQueue(deckId); if (!q.length) return toast(counts(deckId).nw && !newLeft() ? `Você já viu as ${newPerDay()} cartas novas de hoje. Dá para mudar em Preferências.` : "Nada para estudar agora."); go("study", {deck:deckId, queue:q, i:0, seen:0, right:0, firstSeen:{}, total:q.length, t0:Date.now(), times:[]}); }
+function startStudy(deckId){ const q = buildQueue(deckId); if (!q.length) return toast(counts(deckId).nw && !newLeft() ? (newPerDay() ? `Você já viu as ${newPerDay()} cartas novas de hoje. Dá para mudar em Preferências.` : "As cartas novas estão desligadas. Dá para ligar em Preferências.") : "Nada para estudar agora."); go("study", {deck:deckId, queue:q, i:0, seen:0, right:0, firstSeen:{}, total:q.length, t0:Date.now(), times:[]}); }
 const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, r = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(r).padStart(2, "0"); };
 // cronômetro da carta: corre até a pessoa responder
 function answered(){ const st = view; if (st.cardT0 && st.ansMs == null) { st.ansMs = Date.now() - st.cardT0; st.times.push(st.ansMs); } }
@@ -914,6 +975,8 @@ function grade(g){
 function applyTheme(t){
   const r = document.documentElement;
   if (t === "light" || t === "dark") r.dataset.theme = t; else delete r.dataset.theme;
+  // barra do navegador: segue o tema escolhido, ou o do aparelho no automático
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => { const dark = m.media.includes("dark"); m.content = t === "dark" ? "#0f151a" : t === "light" ? "#1d5c88" : dark ? "#0f151a" : "#1d5c88"; });
   try { localStorage.setItem("fich-theme", t || "auto"); } catch(e){}
 }
 function renderPrefs(){
@@ -937,7 +1000,7 @@ function welcomePanel(){
   return `<section class="panel welcome"><h2>Boas-vindas ao Fichário</h2>
     <ol><li><b>Monte seus baralhos.</b> Crie um por matéria ou importe as questões de uma prova em PDF.</li>
     <li><b>Estude um pouco todo dia.</b> O app mostra só o que está na hora de revisar: errou, a carta volta logo; acertou, volta mais tarde.</li>
-    <li><b>Treine com simulado.</b> Dentro de um baralho, faça uma prova com tempo e veja sua nota por matéria.</li></ol>
+    <li><b>Treine com simulado.</b> Toque em Simulado, escolha as matérias e faça uma prova com tempo. No fim sai a nota de cada matéria.</li></ol>
     <button class="btn primary" data-act="welcomed">Entendi, vamos lá</button></section>`;
 }
 const pctOf = (r, n) => n ? Math.round(r / n * 100) : 0;
@@ -960,7 +1023,7 @@ function renderStats(){
     <button class="btn ghost back" data-act="home">← Baralhos</button>
     <h2 style="margin-bottom:14px">Desempenho</h2>
     <span class="label">Últimos 7 dias</span>
-    <div class="stats wide">${stat(w[0], w[0] === 1 ? "resposta" : "respostas")}${stat(w[0] ? pctOf(w[1], w[0]) + "%" : "–", "de acerto")}${stat(w[4] ? clock(w[3] / w[4]) : "–", "por resposta")}${stat(streak(), streak() === 1 ? "dia seguido" : "dias seguidos")}</div>
+    <div class="stats wide n4">${stat(w[0], w[0] === 1 ? "resposta" : "respostas")}${stat(w[0] ? pctOf(w[1], w[0]) + "%" : "–", "de acerto")}${stat(w[4] ? clock(w[3] / w[4]) : "–", "por resposta")}${stat(streak(), streak() === 1 ? "dia seguido" : "dias seguidos")}</div>
     ${leaves.length ? `<div class="banner" style="margin-bottom:16px"><b>Vale reforçar:</b> ${leaves.map(x => `<button class="linkbtn" data-act="open" data-id="${x.id}">${esc(S.decks[x.id].name)}</button> (${x.p}%)`).join(", ")}.</div>` : ""}
     <div class="list-h"><span class="label">Por matéria (baralho)</span></div>
     ${rows.length ? `<div class="panel stable"><div class="srow head"><span class="sname">Matéria</span><span></span><span class="sp">Acerto</span><span class="sn" title="Respostas">Nº</span><span class="st">Tempo</span></div>${rows.map(x => statRow(x.d.name, x.depth, x.e)).join("")}</div>
@@ -990,7 +1053,7 @@ function renderSimBuild(){
             ${sel[d.id] ? `<input class="txt bqty" type="number" min="1" max="${n}" value="${sel[d.id]}" data-id="${d.id}" inputmode="numeric" aria-label="Quantas questões de ${esc(d.name)}">` : "<span></span>"}</label>`
         : `<div class="brow head" style="padding-left:${12 + depth * 16}px"><span></span><span class="bname"><b>${esc(d.name)}</b></span><button class="btn ghost small" data-act="bgroup" data-id="${d.id}">${[...descendants(d.id)].filter(x => x !== d.id && simCards(x).some(c => c.deck === x)).every(x => sel[x]) ? "Desmarcar" : "Marcar todas"}</button></div>`).join("")}</div>
       <form class="panel stack" id="fbuild" style="padding:16px;gap:14px;margin-top:14px">
-        <p style="margin:0"><b class="num">${total}</b> ${total === 1 ? "questão" : "questões"} no simulado</p>
+        <p style="margin:0"><b class="num" id="b-total">${total}</b> <span id="b-total-l">${total === 1 ? "questão" : "questões"}</span> no simulado</p>
         <div class="field"><label class="label" for="sim-min">Tempo de prova (minutos)</label>
           <div class="row"><input class="txt" id="sim-min" type="number" min="1" max="600" value="${view.min || sug}" inputmode="numeric" style="width:110px"><label class="check small" style="margin:0"><input type="checkbox" id="sim-free" ${view.free ? "checked" : ""}><span>Sem limite de tempo</span></label></div>
           <span class="hint">Sugestão: 3 minutos por questão de múltipla escolha e 1,5 por certo ou errado.</span></div>
@@ -999,7 +1062,17 @@ function renderSimBuild(){
     : `<div class="panel empty"><p class="muted">Ainda não há questões de certo ou errado nem de múltipla escolha. Importe uma prova em PDF ou crie cartas desses tipos.</p></div>`}`;
   const keep = () => { const m = document.getElementById("sim-min"), f = document.getElementById("sim-free"), c = document.getElementById("sim-cebr"); if (m && view.minTouched) view.min = +m.value; if (f) view.free = f.checked; if (c) view.cebr = c.checked; };
   $app.querySelectorAll(".bpick").forEach(cb => cb.onchange = () => { keep(); const id = cb.dataset.id; if (cb.checked) sel[id] = Math.min(10, simCards(id).filter(c => c.deck === id).length); else delete sel[id]; renderSimBuild(); });
-  $app.querySelectorAll(".bqty").forEach(inp => inp.onchange = () => { keep(); const id = inp.dataset.id, max = +inp.max; sel[id] = Math.max(1, Math.min(max, Math.round(+inp.value || 1))); renderSimBuild(); });
+  const sumUp = () => {
+    const t = Object.entries(sel).reduce((s, [id, n]) => s + (S.decks[id] ? n : 0), 0);
+    const tb = document.getElementById("b-total"); if (tb) tb.textContent = t;
+    const tl = document.getElementById("b-total-l"); if (tl) tl.textContent = t === 1 ? "questão" : "questões";
+    const go = document.querySelector("#fbuild .btn.primary"); if (go) go.disabled = !t;
+    const m = document.getElementById("sim-min"); if (m && !view.minTouched) m.value = Math.max(1, Math.round(t * (onlyCe ? 1.5 : 3)));
+  };
+  $app.querySelectorAll(".bqty").forEach(inp => {
+    inp.oninput = () => { const id = inp.dataset.id, max = +inp.max, v = Math.round(+inp.value); if (v >= 1) { sel[id] = Math.min(max, v); sumUp(); } };
+    inp.onchange = () => { const id = inp.dataset.id, max = +inp.max; sel[id] = Math.max(1, Math.min(max, Math.round(+inp.value || 1))); inp.value = sel[id]; sumUp(); };
+  });
   const f = document.getElementById("fbuild"); if (!f) return;
   const mIn = document.getElementById("sim-min"); mIn.oninput = () => { view.minTouched = true; view.min = +mIn.value; };
   document.getElementById("sim-free").onchange = e => { mIn.disabled = e.target.checked; view.free = e.target.checked; };
@@ -1007,6 +1080,7 @@ function renderSimBuild(){
   f.onsubmit = e => {
     e.preventDefault();
     const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i+1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    $app.querySelectorAll(".bqty").forEach(inp => { sel[inp.dataset.id] = Math.max(1, Math.min(+inp.max, Math.round(+inp.value || 1))); });
     const ids = shuffle(Object.entries(sel).filter(([id]) => S.decks[id]).flatMap(([id, n]) => shuffle(simCards(id).filter(c => c.deck === id).map(c => c.id)).slice(0, n)));
     if (!ids.length) return;
     const cb = document.getElementById("sim-cebr");
@@ -1102,7 +1176,7 @@ function renderSimRes(){
     <div class="panel" style="padding:22px 18px;text-align:center"><h2 style="margin:0">${r.timeout ? "Tempo esgotado" : "Prova entregue"}</h2>
       <div class="score num ${r.score >= 70 ? "ok" : r.score >= 50 ? "mid" : "low"}">${r.score}%</div>
       <p class="muted" style="margin:0">${r.cebr ? `Nota líquida: ${r.net} (${r.right} certas − ${r.wrong} erradas)` : `${r.right} de ${n} certas`}</p>
-      <div class="stats wide">${stat(r.right, "certas")}${stat(r.wrong, "erradas")}${stat(r.blank, "em branco")}${stat(clock(r.ms), "tempo total")}${stat(answered.length ? clock(avg) : "–", "por questão")}</div></div>
+      <div class="stats wide n5">${stat(r.right, "certas")}${stat(r.wrong, "erradas")}${stat(r.blank, "em branco")}${stat(clock(r.ms), "tempo total")}${stat(answered.length ? clock(avg) : "–", "por questão")}</div></div>
     ${Object.keys(by).length > 1 ? `<div class="list-h" style="margin-top:16px"><span class="label">Por matéria</span></div><div class="panel stable"><div class="srow head"><span class="sname">Matéria</span><span></span><span class="sp">Acerto</span><span class="sn" title="Questões">Nº</span><span class="st">Tempo</span></div>${Object.entries(by).sort((a,b) => pctOf(a[1][1], a[1][0]) - pctOf(b[1][1], b[1][0])).map(([dk, e]) => statRow(S.decks[dk]?.name || "Sem baralho", 0, [e[0], e[1], e[2], e[0]])).join("")}</div>` : ""}
     <div class="list-h" style="margin-top:16px"><span class="label">Correção</span><div class="seg" role="group" style="grid-template-columns:repeat(2,1fr);width:auto"><button data-act="simonly" data-v="wrong" aria-pressed="${r.only !== "all"}">Erros e brancos</button><button data-act="simonly" data-v="all" aria-pressed="${r.only === "all"}">Todas</button></div></div>
     <div class="stack" style="gap:10px">${list.length ? list.map(x => { const c = S.cards[x.id]; if (!c) return ""; const gab = c.type === "mc" ? LETTERS[c.correct] : (c.answer === "C" ? "Certo" : "Errado");
@@ -1275,7 +1349,7 @@ async function resolveDeck(prefix, fallbackName){
 /* importar PDF */
 // [1,2,3,7,9,10] → "1–3, 7, 9–10"
 function ranges(ns){ const a = [...ns].sort((x, y) => x - y), out = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return out.join(", "); }
-const APP_VERSION = "24"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "25"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado) e preenche as respostas pelo número da questão
 async function applyKeyFile(f, items, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -1379,7 +1453,7 @@ function renderPdf(){
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
         <details ${q.comment ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">${q.comment ? "Comentário" : "Adicionar comentário"}</summary><textarea class="txt" id="pdf-c${i}" rows="3" style="margin-top:6px" placeholder="Por que essa é a resposta">${esc(q.comment || "")}</textarea></details>
       </article>`; }).join("")}</div>
-    ${view.rawText ? `<details style="margin-top:14px"><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido do PDF</summary><p class="hint" style="margin-top:6px">Se alguma questão veio errada, mande um print deste texto para o Claude.</p><textarea class="txt" readonly rows="12" style="margin-top:6px;font-size:.85rem">${esc(view.rawText.slice(0, 60000))}</textarea></details>` : ""}
+    ${view.rawText ? `<details style="margin-top:14px"><summary class="small" style="cursor:pointer;font-weight:700">Ver texto lido do PDF</summary><p class="hint" style="margin-top:6px">É o texto que o Fichário conseguiu tirar do PDF. Ajuda a entender quando alguma questão vem cortada ou misturada.</p><textarea class="txt" readonly rows="12" style="margin-top:6px;font-size:.85rem">${esc(view.rawText.slice(0, 60000))}</textarea></details>` : ""}
     <div class="row spread sticky-bar">
       <button class="btn" data-act="pdfagain">Outro PDF</button>
       <button class="btn primary" id="pdf-go" data-act="pdfimport" style="min-height:46px;flex:1">Importar</button>
@@ -1415,7 +1489,7 @@ function renderPdf(){
 function pdfCount(){ const n = document.querySelectorAll(".pdf-inc:checked").length; const b = document.getElementById("pdf-go"); if (b) { b.textContent = n ? `Importar ${n} ${n === 1 ? "questão" : "questões"}` : "Importar"; b.disabled = !n; } }
 async function pdfImport(){
   const it = view.items, deck = view.deck, err = document.getElementById("pdf-err");
-  const cards = [], missing = [], noopts = [];
+  const cards = [], missing = [], noopts = [], emptyKey = [];
   it.forEach((q, i) => {
     if (!document.getElementById("pdf-inc" + i).checked) return;
     const g = document.getElementById("pdf-g" + i).value;
@@ -1423,10 +1497,17 @@ async function pdfImport(){
     if (g === "") { missing.push(q.num); return; }
     const cm = (document.getElementById("pdf-c" + i)?.value ?? q.comment ?? "").trim();
     const c = {deck, type:q.type, front, comment:cm ? esc(cm).replace(/\n/g, "<br>") : "", tags:[], subject:(document.getElementById("pdf-s" + i)?.value || "").trim()};
-    if (q.type === "mc") { c.options = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim()).filter(Boolean); if (c.options.length < 2) { noopts.push(q.num); return; } c.correct = Math.min(+g, c.options.length - 1); }
+    if (q.type === "mc") {
+      const opts = q.options.map((_, k) => document.getElementById(`pdf-o${i}-${k}`).value.trim());
+      c.options = []; c.correct = -1;
+      opts.forEach((o, k) => { if (!o) return; if (k === +g) c.correct = c.options.length; c.options.push(o); });
+      if (c.options.length < 2) { noopts.push(q.num); return; }
+      if (c.correct < 0) { emptyKey.push(q.num); return; }
+    }
     else c.answer = g;
     cards.push(c);
   });
+  if (emptyKey.length) { err.textContent = `A alternativa marcada como gabarito está vazia na${emptyKey.length > 1 ? "s questões" : " questão"} ${emptyKey.join(", ")}.`; err.hidden = false; return; }
   if (noopts.length) { err.textContent = `Faltam as alternativas da${noopts.length > 1 ? "s questões" : " questão"} ${noopts.join(", ")}. Digite ou desmarque.`; err.hidden = false; return; }
   if (missing.length) { err.textContent = `Falta o gabarito da${missing.length > 1 ? "s questões" : " questão"} ${missing.join(", ")}. Escolha a resposta ou desmarque.`; err.hidden = false; return; }
   const btn = document.getElementById("pdf-go"); btn.disabled = true; btn.textContent = "Importando…";
@@ -1518,7 +1599,6 @@ $app.addEventListener("click", e => {
     case "doempty": { const cards = deckCards(view.id); (async () => { for (const c of cards) await store.delCard(c.id); })(); toast(`${cards.length} cartas apagadas`); renderDeck(); break; }
     case "dselstart": view.dsel = new Set(); render(); break;
     case "dselcancel": view.dsel = null; render(); break;
-    case "dseltoggle": view.dsel.has(id) ? view.dsel.delete(id) : view.dsel.add(id); render(); break;
     case "dselall": { const ids = childrenOf(view.name === "home" ? null : view.id).map(x => x.id); const all = ids.every(x => view.dsel.has(x)); ids.forEach(x => all ? view.dsel.delete(x) : view.dsel.add(x)); render(); break; }
     case "dseldel": { const ids = [...view.dsel]; const nc = ids.reduce((n, x) => n + deckCards(x).length, 0); document.getElementById("dselconfirm").innerHTML = `<span class="confirm" style="margin-bottom:8px">Apagar ${ids.length} ${ids.length === 1 ? (view.name === "home" ? "baralho" : "subbaralho") : (view.name === "home" ? "baralhos" : "subbaralhos")} com ${nc} cartas${ids.some(x => S.decks[x]?.shared && S.decks[x].owner !== me.uid) ? " (dos compartilhados por outra pessoa você só sai)" : ""}? Não dá para desfazer. <button class="btn danger solid" data-act="dseldo">Apagar</button><button class="btn ghost" data-act="dselno">Não</button></span>`; break; }
     case "dselno": document.getElementById("dselconfirm").innerHTML = ""; break;
@@ -1543,6 +1623,7 @@ $app.addEventListener("click", e => {
   }
 });
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape") document.querySelectorAll("details.menu[open]").forEach(m => m.open = false);
   if (view.name === "sim" && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target.closest && e.target.closest("input,textarea,[contenteditable]"))) {
     const c = S.cards[view.qs[view.i]]; if (!c) return; const k = e.key.toLowerCase();
     if (k === "arrowright" && view.i < view.qs.length - 1) { e.preventDefault(); simMove(view.i + 1); return; }
@@ -1568,7 +1649,7 @@ document.addEventListener("keydown", e => {
 });
 
 /* ---------- login ---------- */
-const AUTH_ERR = {"auth/invalid-credential":"E-mail ou senha incorretos.","auth/wrong-password":"E-mail ou senha incorretos.","auth/user-not-found":"Não existe conta com esse e-mail. Toque em Criar conta.","auth/email-already-in-use":"Já existe uma conta com esse e-mail. Toque em Entrar.","auth/weak-password":"A senha precisa ter pelo menos 6 caracteres.","auth/invalid-email":"Esse e-mail não parece válido.","auth/too-many-requests":"Muitas tentativas. Espere alguns minutos.","auth/network-request-failed":"Sem internet. Confira a conexão.","auth/operation-not-allowed":"Esse tipo de login ainda não foi ativado no Firebase.","auth/configuration-not-found":"O login ainda não foi ativado no Firebase (Authentication > Método de login).","auth/unauthorized-domain":"Este endereço ainda não foi autorizado no Firebase (Authentication > Configurações > Domínios autorizados)."};
+const AUTH_ERR = {"auth/invalid-credential":"E-mail ou senha incorretos.","auth/wrong-password":"E-mail ou senha incorretos.","auth/user-not-found":"Não existe conta com esse e-mail. Toque em Criar conta.","auth/email-already-in-use":"Já existe uma conta com esse e-mail. Toque em Entrar.","auth/weak-password":"A senha precisa ter pelo menos 6 caracteres.","auth/invalid-email":"Esse e-mail não parece válido.","auth/too-many-requests":"Muitas tentativas. Espere alguns minutos.","auth/network-request-failed":"Sem internet. Confira a conexão.","auth/operation-not-allowed":"Esse tipo de login ainda não foi ativado no Firebase.","auth/configuration-not-found":"O login ainda não foi ativado no Firebase (Authentication > Método de login).","auth/admin-restricted-operation":"Novos cadastros estão fechados. Peça para quem cuida do Fichário liberar seu acesso.","auth/unauthorized-domain":"Este endereço ainda não foi autorizado no Firebase (Authentication > Configurações > Domínios autorizados)."};
 const authMsg = e => AUTH_ERR[e && e.code] || "Não deu certo (" + (e && e.code || "erro") + "). Tente de novo.";
 let authMode = "login";
 // WhatsApp, Instagram e Facebook abrem links num navegador interno onde o Google bloqueia o login
@@ -1626,6 +1707,7 @@ document.addEventListener("click", async e => {
 });
 
 /* ---------- início ---------- */
+applyTheme((() => { try { return localStorage.getItem("fich-theme"); } catch(e){ return null; } })() || "auto");
 if (!store.configured()) {
   $app.innerHTML = `<div class="auth panel empty"><h2>Configuração pendente</h2><p class="muted">Falta preencher o arquivo firebase-config.js com os dados do projeto no Firebase.</p></div>`;
 } else {
@@ -1634,7 +1716,7 @@ if (!store.configured()) {
     me = {uid:user.uid, email:user.email, name:user.displayName || pendingName || (user.email || "").split("@")[0]};
     $app.innerHTML = header() + `<div class="panel empty"><p class="muted">Abrindo seu fichário…</p></div>`;
     await store.init();
-    if (S.profile.theme) applyTheme(S.profile.theme);
+    applyTheme(S.profile.theme || (() => { try { return localStorage.getItem("fich-theme"); } catch(e){ return null; } })() || "auto");
     if (S.profile._missing && !S.profile.seeded && !Object.keys(S.decks).length) { try { await seedExamples(); } catch(err){ console.error(err); } }
     else if (!S.profile.name && !S.profile._missing) store.putProfile();
     go("home");
