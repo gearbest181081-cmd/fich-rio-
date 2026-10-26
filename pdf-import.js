@@ -18,20 +18,32 @@ function pageLines(items, width, columns = true){
   // duas colunas só quando, nas linhas que têm texto dos dois lados, sobra um corredor vazio no meio da página
   const mid = width / 2, hs = width * 0.012;
   const rows = []; [...its].sort((a, b) => b.y - a.y).forEach(i => { const r = rows[rows.length - 1]; if (r && Math.abs(r.y - i.y) <= Math.max(2, i.h * 0.45)) r.its.push(i); else rows.push({y:i.y, its:[i]}); });
-  let both = 0, free = 0;
-  for (const r of rows) {
-    if (!r.its.some(i => i.x + i.w < mid) || !r.its.some(i => i.x > mid)) continue;
-    both++; if (!r.its.some(i => i.x < mid + hs && i.x + i.w > mid - hs)) free++;
-  }
-  const left = its.filter(i => i.x + i.w <= mid + hs), right = its.filter(i => i.x >= mid - hs);
-  const cols = (columns && both >= 3 && free / both >= 0.85 && left.length > 5 && right.length > 5) ? [its.filter(i => i.x < mid), its.filter(i => i.x >= mid)] : [its];
+  const gutter = (pos, h) => {
+    let both = 0, free = 0, prose = 0;
+    for (const r of rows) {
+      const L = r.its.filter(i => i.x + i.w < pos), R = r.its.filter(i => i.x > pos);
+      if (!L.length || !R.length) continue;
+      both++; if (r.its.some(i => i.x < pos + h && i.x + i.w > pos - h)) continue;
+      free++; if (/[A-Za-zÀ-ú]{4}/.test(L.map(i => i.s).join(" ")) && /[A-Za-zÀ-ú]{4}/.test(R.map(i => i.s).join(" "))) prose++;
+    }
+    return {both, free, prose};
+  };
+  const ok = g => g.both >= 3 && g.free / g.both >= 0.85;
+  let pos = mid, g = gutter(mid, hs);
+  // corredor fora do centro (margens diferentes dos dois lados): procura perto do meio, só em texto corrido (tabela não)
+  if (!ok(g)) for (let x = width * 0.4; x <= width * 0.6; x += 1) { const t = gutter(x, width * 0.005); if (ok(t) && t.prose / t.free >= 0.6 && (!ok(g) || t.free / t.both > g.free / g.both || (t.free / t.both === g.free / g.both && Math.abs(x - mid) < Math.abs(pos - mid)))) { g = t; pos = x; } }
+  const left = its.filter(i => i.x + i.w <= pos + hs), right = its.filter(i => i.x >= pos - hs);
+  const cols = (columns && ok(g) && left.length > 5 && right.length > 5) ? [its.filter(i => i.x < pos), its.filter(i => i.x >= pos)] : [its];
   const out = [];
   for (const col of cols) {
     col.sort((a, b) => b.y - a.y || a.x - b.x);
-    let line = [], ly = null;
-    const flush = () => { if (!line.length) return; line.sort((a, b) => a.x - b.x); let t = "", end = null; for (const i of line) { if (end !== null && i.x - end > 1.5 && !t.endsWith(" ") && !i.s.startsWith(" ")) t += " "; t += i.s; end = i.x + i.w; } out.push(t.replace(/\s+/g, " ").trim()); line = []; };
+    let line = [], ly = null; const ls = [];
+    const flush = () => { if (!line.length) return; line.sort((a, b) => a.x - b.x); let t = "", end = null; for (const i of line) { if (end !== null && i.x - end > 1.5 && !t.endsWith(" ") && !i.s.startsWith(" ")) t += " "; t += i.s; end = i.x + i.w; } ls.push({t:t.replace(/\s+/g, " ").trim(), y:line[0].y, h:Math.max(...line.map(i => i.h))}); line = []; };
     for (const i of col) { if (ly !== null && Math.abs(i.y - ly) > Math.max(2, i.h * 0.45)) flush(); line.push(i); ly = i.y; }
     flush();
+    // espaço vertical maior que o normal entre duas linhas vira linha vazia (separa parágrafos e blocos)
+    const steps = ls.slice(1).map((l, k) => ls[k].y - l.y).filter(d => d > 0).sort((a, b) => a - b), step = steps[Math.floor(steps.length / 2)] || 0;
+    ls.forEach((l, k) => { if (k && step && ls[k - 1].y - l.y > Math.max(step * 1.6, step + l.h * 0.6)) out.push(""); out.push(l.t); });
   }
   return out;
 }
@@ -159,7 +171,7 @@ function joinText(ls){
     if (!k) { out = l; return; }
     const p = ls[k - 1];
     const brk = own(p) || own(l) || (/[.!?:;"”»)\]…]$/.test(p) && p.length < full * 0.85)
-      || (k === ls.length - 1 && l.length < 45 && !/[.!?;,]$/.test(l)) || /^(?:dispon[íi]vel em|fonte:|adaptado|texto adaptado|in:)/i.test(l);
+      || (k === ls.length - 1 && l.length < 45 && !/[.!?;,]$/.test(l)) || /^(?:dispon[íi]vel em|fonte:|adaptado|texto adaptado|in:)/i.test(l) || /^[•●▪]\s?/.test(l);
     out += brk ? "\n" + l : /[a-zà-ú]-$/.test(p) && /^[a-zà-ú]/.test(l) ? l : " " + l;
   });
   return out;
@@ -169,7 +181,7 @@ function joinText(ls){
 const SUBJECTS = [
   ["Língua Portuguesa", "concordancia|regencia|crase|colocacao pronominal|oracao|oracoes|sujeito|predicado|substantivo|adjetivo|adverbio|pronome|conjuncao|preposicao|pontuacao|virgula|acentuacao|ortografia|sinonimo|antonimo|coesao|coerencia|sentido original|reescrita|vocabulo|figura de linguagem|interpretacao do texto|no texto|do texto|trecho|semantic|morfolog|sintatic|voz passiva|gramatical|norma culta|norma-padrao|tempo verbal|forma verbal|frase|frases|periodo composto"],
   ["Matemática", "equacao|funcao (?:afim|quadratica|exponencial|logaritmica|do primeiro grau|do segundo grau)|porcentagem|razao|proporcao|regra de tres|fracao|perimetro|volume|triangulo|retangulo|circulo|mmc|mdc|potencia|raiz quadrada|progressao aritmetica|progressao geometrica|numeros inteiros|numero natural|geometri|algebr"],
-  ["Matemática Financeira", "juros|montante|capitalizacao|amortizacao|sistema de amortizacao|tabela price|desconto comercial|desconto racional|taxa nominal|taxa efetiva|valor presente|valor futuro|emprestimo|financiamento|prestacao|prestacoes|parcelas mensais"],
+  ["Matemática Financeira", "juros|montante|capitalizacao|amortizacao|sistema de amortizacao|tabela price|desconto comercial|desconto racional|taxa nominal|taxa efetiva|valor presente|valor futuro|emprestimo|financiamento|valor da prestacao|prestacoes (?:mensais|iguais|fixas|anuais)|parcelas mensais"],
   ["Raciocínio Lógico", "proposicao|proposicoes|logica|tabela-verdade|tabela verdade|negacao|silogismo|se e somente se|conectivo|argumento valido|premissa|tautologia|contradicao|equivalente logic|diagrama de venn|probabilidade|combinacao|arranjo|permutacao|sequencia logica|anagrama"],
   ["Informática", "windows|linux|excel|word|planilha|navegador|internet|e-mail|correio eletronico|virus|malware|ransomware|backup|hardware|software|computador|teclas de atalho|atalho|nuvem|firewall|phishing|sistema operacional|libreoffice|writer|calc|outlook|chrome|firefox|url|intranet|protocolo http|pendrive|memoria ram"],
   ["Direito Constitucional", "constituicao federal|constituicao|cf/88|cf/1988|constitucional|emenda constitucional|direitos fundamentais|direitos e garantias|habeas data|mandado de seguranca|mandado de injuncao|acao popular|stf|supremo tribunal|poder legislativo|congresso nacional|senado federal|camara dos deputados|presidente da republica|clausula petrea|nacionalidade|direitos politicos|direitos sociais"],
@@ -181,6 +193,7 @@ const SUBJECTS = [
   ["Contabilidade", "ativo|passivo|patrimonio liquido|balanco patrimonial|dre|demonstracao do resultado|demonstracoes contabeis|lancamento|debito|credito|estoque|estoques|depreciacao|receita|despesa|custo|cpc|nbc tg|contabil|contabeis|fornecedores|lucro|razonete|provisao|escrituracao|exercicio social|caixa e equivalentes|ativo circulante|imobilizado|intangivel|amortizacao acumulada|mensuracao|valor justo"],
   ["Ética e Legislação Profissional", "codigo de etica|etica profissional|profissional da contabilidade|crc|cfc|conselho federal de contabilidade|conselho regional|educacao profissional continuada|epc|nbc pg|perito contabil|cnpc|exercicio profissional|responsabilidade tecnica|sigilo profissional|profissao contabil|funcao social|interesse publico"],
   ["Auditoria", "auditoria|auditor|auditores|parecer|opiniao do auditor|amostragem|nbc ta|distorcao relevante|ceticismo|procedimentos de auditoria|controle interno"],
+  ["Legislação Eleitoral", "eleitoral|eleitorais|eleicao|eleicoes|eleitor|eleitores|campanha eleitoral|gastos de campanha|partido politico|partidos politicos|candidato|candidatos|diplomacao|justica eleitoral|tse|tre|fundo partidario"],
   ["Administração", "planejamento estrategico|organizacao|lideranca|motivacao|gestao de pessoas|swot|maslow|herzberg|cultura organizacional|clima organizacional|administracao geral|processo decisorio|estrutura organizacional"],
   ["Economia", "oferta|demanda|pib|inflacao|elasticidade|monopolio|oligopolio|microeconomia|macroeconomia|politica monetaria|politica fiscal|taxa de cambio|curva de"],
   ["Estatística", "media aritmetica|mediana|moda|desvio padrao|variancia|amostra|distribuicao normal|frequencia relativa|quartil|estatistic"],
@@ -201,7 +214,10 @@ export function guessSubject(text){
 }
 
 export function parseQuestions(text){
-  let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  let lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim());
+  // linhas que começam um bloco depois de um espaço vertical (a leitura do PDF marca com linha vazia)
+  const paraStart = new Set(lines.filter((l, i) => l && i && !lines[i - 1]));
+  lines = lines.filter(Boolean);
   // alternativa que é uma fração montada (numerador em cima, letra no meio, denominador embaixo): "(A) 5/7"
   for (let i = 1; i < lines.length - 1; i++) {
     if (/^\(?[A-E]\)$/.test(lines[i]) && /^\d{1,4}$/.test(lines[i - 1]) && /^\d{1,4}$/.test(lines[i + 1])) {
@@ -226,7 +242,8 @@ export function parseQuestions(text){
   // a medida) e com as repetições espalhadas. Frases que se repetem em poucas questões ("Assinale a alternativa
   // correta:") e linhas iguais em alternativas da mesma questão ("Ferroviária Federal, Polícias Militares, Corpos de") ficam
   const pos = {}; lines.forEach((l, i) => (pos[l] = pos[l] || []).push(i));
-  const spread = l => pos[l].length > 1 && pos[l].every((p, k) => !k || p - pos[l][k - 1] >= 12);
+  // (páginas finais quase vazias deixam o rodapé colado: com 4+ repetições basta a maioria espalhada)
+  const spread = l => { const ps = pos[l]; if (ps.length < 2) return false; const far = ps.filter((p, k) => k && p - ps[k - 1] >= 12).length; return ps.length < 4 ? far === ps.length - 1 : far >= (ps.length - 1) * 0.75; };
   const headLike = l => l.length > 10 && !ALT.test(l) && !QSTART.test(l) && !BANCA.test(l) && !gabLine(l) && !COMMENT.test(l);
   const maxRep = Math.max(0, ...Object.keys(freq).filter(l => freq[l] > 1 && headLike(l) && spread(l)).map(l => freq[l]));
   const pages = Math.max(2, Math.ceil(maxRep / 2));
@@ -317,6 +334,66 @@ export function parseQuestions(text){
     i = end - 1;
   }
   if (drop.size) lines = lines.filter((l, i) => !drop.has(i));
+
+  // prova de itens no estilo Cebraspe: "Com base no texto CG1A1-I, julgue os itens a seguir." e "A partir dessa situação
+  // hipotética, julgue o item." O texto citado, a situação e a instrução valem para os itens seguintes; sem isso a
+  // situação grudava no fim do item anterior e o item seguinte ficava sem sentido
+  const qnum = l => { const m = l && l.match(QSTART); return m ? +(m[1] || m[3]) : null; };
+  const JULG = /\bjulgue\b/i, caps = l => !/[a-zà-ú]/.test(l) && /[A-ZÀ-Ú]{3}/.test(l);
+  const ceb = !strict && lines.filter(l => JULG.test(l)).length >= 3;
+  const blocks = [];
+  // onde termina o texto do item que começa em p (antes de "end"): no espaço vertical ou, sem ele, no fim de frase
+  // ("Nessa situação, ..." continua o próprio item)
+  // (early: o primeiro dos dois, para cortar a parte discursiva que vem logo depois do último item)
+  const itemEnd = (p, end, early = false) => {
+    const cont = l => /^(?:ness[ae]s?|nest[ae]s?|dess[ae]s?|assim|portanto|logo|ou seja)\b/i.test(l);
+    let gap = end, sent = end;
+    for (let k = p + 1; k < end; k++) if (paraStart.has(lines[k]) && !cont(lines[k])) { gap = k; break; }
+    for (let k = p + 1; k < end - 1; k++) if (/[.!?]["”’]?$/.test(lines[k - 1]) && /^[A-ZÀ-Ú“"‘(•●]/.test(lines[k]) && !cont(lines[k])) { sent = k; break; }
+    return early ? Math.min(gap, sent) : gap < end ? gap : sent;
+  };
+  if (ceb) {
+    const named = {}, cut = new Set();
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].length <= 30 && lines[i].match(/^texto\s+([A-Z0-9][\w\-]{0,15})$/i); if (!m) continue;
+      let k = i + 1; while (k < lines.length && k < i + 250 && qnum(lines[k]) === null && !/\(com adapta[çc][õo]es\)\.?$|^internet:|^dispon[íi]vel em/i.test(lines[k])) k++;
+      if (k >= lines.length || qnum(lines[k]) !== null || k - i < 3) continue;
+      while (k + 1 < lines.length && /^(?:internet|dispon[íi]vel|acesso em|<)/i.test(lines[k + 1])) k++;
+      named[m[1].toUpperCase()] = joinText(lines.slice(i, k + 1));
+      for (let j = i; j <= k; j++) cut.add(j);
+      i = k;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      if (cut.has(i) || !JULG.test(lines[i]) || qnum(lines[i]) !== null) continue;
+      let e = i; while (e < i + 4 && e + 1 < lines.length && !/[.:]$/.test(lines[e]) && qnum(lines[e + 1]) === null) e++;
+      const num = qnum(lines[e + 1] || ""); if (num === null) continue;
+      let st = i; while (st > 0 && i - st < 4 && !cut.has(st - 1) && !/[.!?:;)]["”]?$/.test(lines[st - 1]) && qnum(lines[st - 1]) === null && !caps(lines[st - 1])) st--;
+      // a situação hipotética fica entre o fim do item anterior e a instrução
+      let c = st;
+      for (let k = st - 1; k >= Math.max(0, st - 150); k--) {
+        if (cut.has(k)) break;
+        if (qnum(lines[k]) === num - 1) { c = itemEnd(k, st); break; }
+      }
+      // título de matéria em maiúsculas fica na leitura (ele dá a matéria das questões seguintes)
+      while (c < st && caps(lines[c])) c++;
+      const instr = lines.slice(st, e + 1).join(" ");
+      const ref = instr.match(/\btextos?\s+([A-Z0-9][\w\-]{0,15})/i);
+      // situação que termina no meio da frase (a instrução começa na mesma frase): vai tudo junto
+      const sit = c < st && !/[.!?:;)]["”]?$/.test(lines[st - 1]) ? [joinText(lines.slice(c, e + 1))] : [c < st ? joinText(lines.slice(c, st)) : "", instr];
+      const parts = [ref && named[ref[1].toUpperCase()], ...sit].filter(Boolean);
+      blocks.push({from:num, text:parts.join("\n\n"), lines:[...lines.slice(c, e + 1)]});
+      for (let j = c; j <= e; j++) cut.add(j);
+      i = e;
+    }
+    // parte discursiva depois do último item ("redija um texto dissertativo"): fica de fora
+    const disc = lines.findLastIndex(l => /\bredija\b|texto dissertativo|prova discursiva|quest[ãa]o discursiva/i.test(l));
+    if (disc > 0) {
+      let last = -1; for (let k = disc - 1; k >= 0; k--) if (qnum(lines[k]) !== null && !cut.has(k)) { last = k; break; }
+      if (last >= 0) for (let j = itemEnd(last, disc + 1, true); j < lines.length; j++) cut.add(j);
+    }
+    if (cut.size) lines = lines.filter((l, i) => !cut.has(i));
+    blocks.forEach((b, k) => { b.to = blocks[k + 1] ? blocks[k + 1].from - 1 : Infinity; support.push(b); });
+  }
 
   // as alternativas vêm logo em seguida (antes de outra questão)?
   const altSoon = i => { for (let k = i + 1; k < Math.min(lines.length, i + 6); k++) { if (ALT.test(lines[k])) return true; if (QSTART.test(lines[k]) || BANCA.test(lines[k])) return false; } return false; };
@@ -418,14 +495,22 @@ export function parseQuestions(text){
   // quantas questões a prova parece ter: maior número de cabeçalho forte ou do gabarito
   const keyNums = Object.keys(key).map(Number);
   const expected = Math.max(0, ...(strong.length >= 5 ? strong.map(i => +((lines[i].match(QSTART) || [])[1] || (lines[i].match(QSTART) || [])[3] || 0)) : []), ...(keyNums.length >= 5 ? keyNums : []));
+  const lastNum = Math.max(0, ...qs.map(q => q.num));
+  // nos itens Cebraspe a matéria sai do grupo inteiro (instrução, situação e itens), não de cada item sozinho
+  const norm = t => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const named = b => { const t = norm(b.lines.join(" ")); return SUBJECTS.map(([n]) => n).find(n => n.includes(" ") && t.includes(norm(n))); };
+  const groupSubject = b => b.subject ?? (b.subject = named(b) || guessSubject([...b.lines, ...qs.filter(q => q.num >= b.from && q.num <= b.to).map(q => q.front)].join(" ")));
+  let prevSubject = "";
   const result = qs.filter(q => q.front.length > 3).map(q => {
     const ans = q.answer || key[q.num] || null;
-    // sem alternativas, mas com cara de múltipla escolha (a página das alternativas faltou ou não foi lida)
-    const lost = q.options.length < 2 && ((ans && /[ABD]/.test(ans)) || /assinale|alternativa|respectivamente|verdadeira \(V\)|correto o que se afirma|est[áa]\s+corret[ao]\s+(?:o|apenas)/i.test(q.front));
-    const isCE = !lost && (q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1])));
-    const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment, subject:q.section || guessSubject([q.front, ...q.options, q.comment].join(" "))};
     const sup = support.find(s => q.num >= s.from && q.num <= s.to);
-    if (sup) { out.support = sup.text; out.supportRange = [sup.from, sup.to]; }
+    // sem alternativas, mas com cara de múltipla escolha (a página das alternativas faltou ou não foi lida)
+    const lost = q.options.length < 2 && ((ans && /[ABD]/.test(ans)) || (!ceb && /assinale|alternativa|respectivamente|verdadeira \(V\)|correto o que se afirma|est[áa]\s+corret[ao]\s+(?:o|apenas)/i.test(q.front)));
+    const isCE = !lost && (q.options.length < 2 || (q.options.length === 2 && /^certo/i.test(q.options[0]) && /^errado/i.test(q.options[1])));
+    const out = {num:q.num, type:isCE ? "ce" : "mc", front:q.front, comment:q.comment, subject:q.section || (sup && sup.lines && groupSubject(sup)) || guessSubject([q.front, ...q.options, q.comment].join(" "))};
+    if (sup) { out.support = sup.text; out.supportRange = [sup.from, Math.min(sup.to, lastNum)]; }
+    // item Cebraspe sem pista de matéria: fica com a do item anterior (os grupos vêm em blocos da mesma matéria)
+    if (ceb && !out.subject) out.subject = prevSubject; prevSubject = out.subject;
     if (ans === "X") out.void = true; // anulada no gabarito
     if (isCE) out.answer = ans === "C" || ans === "E" ? ans : null;
     else if (lost) { out.options = ["", "", "", ""]; out.lost = true; const idx = ans ? "ABCD".indexOf(ans) : -1; out.correct = idx >= 0 ? idx : null; }

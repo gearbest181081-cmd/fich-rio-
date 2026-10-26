@@ -1105,7 +1105,7 @@ async function resolveDeck(prefix, fallbackName){
 /* importar PDF */
 // [1,2,3,7,9,10] → "1–3, 7, 9–10"
 function ranges(ns){ const a = [...ns].sort((x, y) => x - y), out = []; for (let i = 0; i < a.length; i++) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; out.push(j > i ? `${a[i]}–${a[j]}` : `${a[i]}`); i = j; } return out.join(", "); }
-const APP_VERSION = "27"; // acompanhar o número do cache em sw.js
+const APP_VERSION = "28"; // acompanhar o número do cache em sw.js
 // lê o PDF do gabarito (com leitura por imagem se for escaneado); pode ter várias versões (Prova 1, Prova 2…)
 async function readKeyFile(f, msg){
   msg.textContent = "Lendo o gabarito…";
@@ -1243,7 +1243,7 @@ function renderPdf(){
         <div class="row spread"><label class="row" style="gap:8px;font-weight:700"><input type="checkbox" class="pdf-inc" id="pdf-inc${i}" data-i="${i}" ${has ? "checked" : ""}> Questão ${q.num} <span class="tchip">${TSHORT[q.type]}</span></label>${gab}</div>
         <div class="row small" style="gap:8px"><label for="pdf-s${i}" class="muted">Matéria</label><input class="txt pdf-s" id="pdf-s${i}" list="pdf-subjects" value="${esc(q.subject || "")}" placeholder="Sem matéria (fica no baralho principal)" style="flex:1;min-width:0;padding:6px 10px"></div>
         ${q.void ? `<p class="small" style="margin:0;color:var(--warn)"><b>Anulada no gabarito oficial.</b></p>` : ""}
-        ${q.support != null ? `<details><summary class="small" style="cursor:pointer;font-weight:700">Texto de apoio${q.supportRange ? ` · questões ${q.supportRange[0]}${q.supportRange[1] !== q.supportRange[0] ? ` a ${q.supportRange[1]}` : ""}` : ""}</summary><p class="hint" style="margin-top:6px">Vai junto no começo da carta.</p><textarea class="txt" id="pdf-t${i}" rows="8" style="margin-top:6px">${esc(q.support)}</textarea></details>` : ""}
+        ${q.support != null ? `<details><summary class="small" style="cursor:pointer;font-weight:700">Texto de apoio${q.supportRange ? (q.supportRange[1] !== q.supportRange[0] ? ` · questões ${q.supportRange[0]} a ${q.supportRange[1]}` : ` · questão ${q.supportRange[0]}`) : ""}</summary><p class="hint" style="margin-top:6px">Vai junto no começo da carta.</p><textarea class="txt" id="pdf-t${i}" rows="8" style="margin-top:6px">${esc(q.support)}</textarea></details>` : ""}
         ${q.lost ? `<p class="banner" style="margin:0">Não achei as alternativas desta questão no PDF. Digite abaixo ou deixe desmarcada.</p>` : ""}
         <textarea class="txt typed-in" id="pdf-f${i}" rows="${Math.min(10, Math.max(3, (q.front.match(/\n/g) || []).length + 2))}" style="margin:0">${esc(q.front)}</textarea>
         ${q.type === "mc" ? `<div class="stack" style="gap:6px">${q.options.map((o, k) => `<div class="opt" style="grid-template-columns:auto 1fr"><span class="letter">${"ABCDE"[k]}</span><input class="txt" id="pdf-o${i}-${k}" value="${esc(o)}"></div>`).join("")}</div>` : ""}
